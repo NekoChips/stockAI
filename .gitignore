@@ -1,0 +1,21 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local runtime data
+data/*.sqlite3
+data/*.sqlite3-*
+reports/
+.learnings/

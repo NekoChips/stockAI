@@ -1,0 +1,98 @@
+{
+  "market": {
+    "timezone": "Asia/Shanghai",
+    "allowed_exchanges": ["SH", "SZ"],
+    "allowed_asset_types": ["stock", "etf"]
+  },
+  "data": {
+    "provider": "akshare",
+    "history_provider": "akshare",
+    "freshness_seconds": 90,
+    "history": {
+      "interval": "daily",
+      "adjust": "qfq",
+      "start": "20240101",
+      "end": "20500101"
+    },
+    "providers": {
+      "akshare": {
+        "stock_spot_function": "stock_zh_a_spot_em",
+        "fund_spot_function": "fund_etf_spot_em",
+        "stock_history_function": "stock_zh_a_hist",
+        "fund_history_function": "fund_etf_hist_em",
+        "index_history_function": "stock_zh_index_daily_tx",
+        "index_history_fallback_functions": ["stock_zh_index_daily", "index_zh_a_hist"]
+      },
+      "biying": {
+        "licence_env": "BIYING_API_LICENCE",
+        "licence": "",
+        "base_url": "https://api.biyingapi.com",
+        "stock_realtime_path": "/hsstock/real/time/{code}/{licence}",
+        "fund_realtime_path": "/fd/real/time/{code}/{licence}",
+        "history_base_url": "https://api.biyingapi.com",
+        "history_path_template": "/hsstock/vip/{symbol}/{interval}/{adjust}/{licence}"
+      },
+      "eastmoney_public": {
+        "base_url": "https://push2.eastmoney.com",
+        "history_base_url": "https://push2his.eastmoney.com"
+      }
+    }
+  },
+  "storage": {
+    "driver": "sqlite",
+    "database": "data/stock_ai_agent.sqlite3"
+  },
+  "monitor": {
+    "poll_seconds": 60,
+    "post_close_report_time": "15:05",
+    "respect_market_hours": true,
+    "settle_on_start": true
+  },
+  "paper_account": {
+    "initial_cash": "1000000",
+    "fee_rate": "0.0003",
+    "slippage_rate": "0.0005"
+  },
+  "universe": [
+    {"symbol": "588170.SH", "asset_type": "etf", "name": "科创100ETF基金"},
+    {"symbol": "588200.SH", "asset_type": "etf", "name": "科创芯片ETF基金"}
+  ],
+  "benchmarks": [
+    {"symbol": "000001.SH", "name": "上证指数", "akshare_symbol": "000001"},
+    {"symbol": "399001.SZ", "name": "深证成指", "akshare_symbol": "399001"},
+    {"symbol": "000300.SH", "name": "沪深300", "akshare_symbol": "000300"},
+    {"symbol": "399006.SZ", "name": "创业板指", "akshare_symbol": "399006"},
+    {"symbol": "000688.SH", "name": "科创50", "akshare_symbol": "000688"}
+  ],
+  "risk": {
+    "max_symbol_weight": "0.60",
+    "max_total_exposure": "0.90",
+    "min_cash_ratio": "0.05",
+    "max_drawdown": "0.12",
+    "max_daily_trades": 6,
+    "high_atr_ratio": "0.04"
+  },
+  "strategy": {
+    "target_weight_levels": ["0", "0.20", "0.40", "0.60"],
+    "manual_approval_required": true,
+    "weights": {
+      "trend": "0.30",
+      "momentum": "0.25",
+      "volatility": "0.15",
+      "volume": "0.15",
+      "risk_penalty": "0.15",
+      "time_series_momentum": "0.20",
+      "mean_reversion": "0.15",
+      "relative_strength": "0.20",
+      "volatility_target": "0.15",
+      "drawdown_control": "0.30"
+    },
+    "quant": {
+      "lookback_days": 20,
+      "holding_days": 5,
+      "mean_reversion_z": "-1.2",
+      "drawdown_stop": "0.08",
+      "cooldown_days": 3
+    }
+  }
+}
