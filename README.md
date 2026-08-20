@@ -46,87 +46,101 @@ AKShare / 备用公开数据源
 
 MySQL 适配器仅在发布进程首次访问存储时延迟加载并建立连接，随后自动创建需要的表和索引。开发与单元测试仍默认使用 SQLite，不会加载或连接 MySQL。
 
-## Docker 发布部署
+## 镜像发布与 Docker Compose 部署
 
-### 1. 生成发布包
+生产部署从 GitHub Container Registry（GHCR）拉取镜像，部署机不再构建源码。[docker-compose.yml](./docker-compose.yml) 可直接粘贴到 NAS 图形界面，也可用于命令行部署。已有的 `docker-compose.release.yml` 仅作为离线环境或镜像仓库不可用时的本地构建备用方案。
 
-在项目根目录执行：
+### 镜像发布规则
 
-```bash
-sh scripts/package-release.sh 0.1.0-mysql
-```
+[publish-image.yml](./.github/workflows/publish-image.yml) 会构建 `linux/amd64` 与 `linux/arm64` 镜像并推送至 `ghcr.io/nekochips/stockai`：
 
-生成的 `dist/stockai-release-0.1.0-mysql.tar.gz` 不包含 SQLite 数据、日报、本地发布配置或数据库密码。将该文件传到部署机后解压：
+- 推送到 `develop`：发布 `develop` 与对应的 `sha-*` 镜像。
+- 推送到 `release`：发布 `release`、`latest` 与对应的 `sha-*` 镜像。
+- 推送 `v*` Git 标签：发布版本标签、`latest` 与对应的 `sha-*` 镜像。
+- GitHub Actions 页面也支持手动执行工作流。
 
-```bash
-tar -xzf stockai-release-0.1.0-mysql.tar.gz
-cd stockai-release-0.1.0-mysql
-```
+生产环境默认使用 `latest`，测试环境使用 `develop`，需要精确发布或回滚时使用 `v0.1.0` 一类不可变版本标签。首次发布后应在 GitHub Packages 中确认镜像为 Public；若保持 Private，部署机需先使用具有 `read:packages` 权限的令牌执行 `docker login ghcr.io`。
 
-### 2. 配置发布数据库
+### NAS 图形界面直接部署
 
-在部署机创建私有环境文件：
+这种方式不需要上传源码或发布压缩包。在 NAS 的容器管理界面创建 Compose 项目：
 
-```bash
-cp docker/.env.release.example docker/.env.release
-chmod 600 docker/.env.release
-```
+1. 项目名称填写 `stockai`。
+2. 存放路径选择共享文件夹中的项目目录，例如 `共享文件夹/docker/stockai`。
+3. 将 [docker-compose.yml](./docker-compose.yml) 的完整内容粘贴到“Compose配置”，或者通过“导入”选择该文件。
+4. 在编辑器中替换全部 `CHANGE_ME`，分别填写 MySQL 地址、数据库名、用户名和密码，并保留值两侧的双引号；端口不是 `3306` 时一并修改 `STOCK_AI_MYSQL_PORT`。
+5. 如宿主机端口 `8765` 已占用，将 `"8765:8765"` 左侧的端口改成其他端口，例如 `"8876:8765"`。
+6. 勾选“创建完成后立即运行”，然后点击“立即部署”。
 
-编辑 `docker/.env.release`，填写以下变量：
+模板直接使用 `ghcr.io/nekochips/stockai:latest`，包含 Web、实时盯盘和一次性初始化服务。`bootstrap` 会同步证券目录、观察池历史 K 线和基准指数，执行完成后以状态码 `0` 停止，这是正常状态；`web` 和 `monitor` 会持续运行。
 
-```dotenv
-STOCK_AI_MYSQL_HOST=
-STOCK_AI_MYSQL_PORT=
-STOCK_AI_MYSQL_DATABASE=
-STOCK_AI_MYSQL_USERNAME=
-STOCK_AI_MYSQL_PASSWORD=
-STOCK_AI_WEB_PORT=8765
-```
+MySQL 目标数据库需要提前创建，账户需要具备建表、建索引、读写和删除权限。真实数据库凭据只填写在 NAS 项目编辑器中，不要回写到仓库里的模板。Markdown 日报会保存在所选项目路径的 `reports/` 目录，交易、持仓、观察池和回测数据保存在外部 MySQL。
 
-前五项用于连接 MySQL，`STOCK_AI_WEB_PORT` 是宿主机暴露 Web 页面使用的端口。修改数据库地址、端口、库名、用户名或密码后，只需修改此私有文件并重启服务，不需要重建镜像。
+部署完成后访问 `http://NAS地址:8765`。若 GHCR 镜像不是 Public，需要先在 NAS 的镜像仓库设置中配置具有 `read:packages` 权限的 GitHub 凭据，否则项目无法拉取镜像。
 
-MySQL 账户需要对目标数据库拥有建表、建索引、读写和删除权限，因为首次启动会自动初始化表结构。生产环境建议由数据库管理员创建专用数据库和最小权限账户。
+### NAS 图形界面更新
 
-### 3. 构建并启动
+GitHub Actions 发布新的 `latest` 镜像后，在 NAS 项目界面停止项目并执行重新构建或重新部署。模板设置了 `pull_policy: always`，部署时会拉取最新镜像；MySQL 数据和项目目录下的 `reports/` 不会随容器重建而删除。
 
-部署机需要 Docker Engine 与 Docker Compose Plugin。先构建镜像：
+需要回滚时，将 Compose 中的镜像标签从 `latest` 改成之前的版本标签，例如 `ghcr.io/nekochips/stockai:v0.1.0`，然后重新部署项目。
+
+### 命令行服务器部署
+
+命令行部署机需要 Docker Engine 与 Docker Compose Plugin。将 `docker-compose.yml` 放入部署目录，替换其中全部 `CHANGE_ME` 后执行：
 
 ```bash
-docker compose -f docker-compose.release.yml build
+docker compose pull
+docker compose up -d --remove-orphans
 ```
 
-镜像会直接安装运行依赖，并对网络下载设置 5 次重试和 120 秒超时，不再为构建项目本身创建 PEP 517 隔离环境。若部署机访问默认 PyPI 不稳定，可在构建时指定可访问的镜像源：
+`bootstrap` 会自动完成首次数据初始化。浏览器访问 `http://部署机地址:8765`。
 
-```bash
-docker compose -f docker-compose.release.yml build \
-  --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-```
+### 从旧版部署迁移
 
-首次部署还需要为固定观察池准备历史 K 线；这三个一次性命令会连接 MySQL、自动建表并写入初始化数据。它们执行完成后启动实时盯盘与 Web 服务：
-
-```bash
-docker compose -f docker-compose.release.yml run --rm monitor sync-instruments --config config/release.container.yaml
-docker compose -f docker-compose.release.yml run --rm monitor sync-history --config config/release.container.yaml
-docker compose -f docker-compose.release.yml run --rm monitor sync-benchmarks --config config/release.container.yaml
-docker compose -f docker-compose.release.yml up -d
-```
-
-查看状态和日志：
-
-```bash
-docker compose -f docker-compose.release.yml ps
-docker compose -f docker-compose.release.yml logs -f monitor
-docker compose -f docker-compose.release.yml logs -f web
-```
-
-浏览器访问 `http://部署机地址:STOCK_AI_WEB_PORT`。停止或更新服务：
+之前通过 `docker-compose.release.yml` 在服务器构建镜像的部署，需要先在旧发布目录停止旧服务。不要添加 `-v`，避免误删 Docker 卷：
 
 ```bash
 docker compose -f docker-compose.release.yml down
-docker compose -f docker-compose.release.yml up -d --build
 ```
 
-`runtime/reports/` 挂载到宿主机，用于保留 Markdown 收盘日报；交易、持仓、回测与观察池数据保存在 MySQL。
+将旧目录中的 `runtime/reports/` 迁移到新发布目录的 `reports/`，然后按“命令行服务器部署”执行。外部 MySQL 数据不会随容器停止而删除。确认新服务正常后，旧源码目录和旧本地镜像可以自行归档或删除。
+
+### 命令行一键更新
+
+新镜像发布后，在部署目录执行一条命令即可拉取镜像并重建变化的服务：
+
+```bash
+docker compose up -d --pull always --remove-orphans
+```
+
+更新不会清空 MySQL，也不会删除 `runtime/reports/`。查看服务、健康状态和日志：
+
+日常业务代码更新只需要发布新镜像并执行上述命令；只有 `docker-compose.yml` 或发布环境变量结构发生变化时，才需要同步新的部署文件。
+
+```bash
+docker compose ps
+docker compose logs --tail=100 monitor web bootstrap
+```
+
+修改 MySQL、端口或其他环境变量后，使用 `--force-recreate` 让容器重新读取配置：
+
+```bash
+docker compose up -d --pull always --force-recreate --remove-orphans
+```
+
+### 命令行版本回滚
+
+将 `docker-compose.yml` 中的镜像标签改为上一个版本，例如 `ghcr.io/nekochips/stockai:v0.1.0`，然后再次执行一键更新命令。回滚只替换应用容器，不会回滚或删除 MySQL 数据；涉及数据库结构变更时必须先确认版本兼容性。
+
+### 本地构建备用方案
+
+无法访问 GHCR 时可以在部署机使用源码构建：
+
+```bash
+docker compose --env-file docker/.env.release -f docker-compose.release.yml up -d --build --remove-orphans
+```
+
+如需生成完整发布压缩包，可执行 `sh scripts/package-release.sh 0.1.0-mysql`。脚本会排除敏感配置、运行数据和 macOS 扩展属性，避免 Linux 解压时出现 `LIBARCHIVE.xattr.*` 告警。
 
 ## 环境要求
 
