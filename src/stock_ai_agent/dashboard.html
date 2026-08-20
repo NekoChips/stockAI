@@ -249,7 +249,7 @@
       .view-tab { min-height:46px; white-space:nowrap; }
       main { padding-top:16px; }
       .outperformance-grid { grid-template-columns:1fr; }
-      .performance-panel .panel-head { display:flex; }
+      .performance-panel .panel-head { display:grid; grid-template-columns:minmax(0,1fr); gap:14px; }
       .performance-controls { width:100%; grid-template-columns:1fr; grid-template-areas:"range" "picker" "chart"; }
       #chartTabs { justify-self:end; }
       .performance-range-picker { width:100%; min-width:0; }
@@ -421,13 +421,13 @@
         if (latestData) renderPerformance(latestData);
       }));
       document.querySelectorAll('#performanceRangeTabs button').forEach(button => button.addEventListener('click', () => {
-        performanceRangeMode = button.dataset.mode;
-        document.querySelectorAll('#performanceRangeTabs button').forEach(item => item.classList.toggle('active', item === button));
+        const nextMode = button.dataset.mode, currentRange = performanceRange();
+        performanceRangeMode = nextMode;
         if (performanceRangeMode === 'custom' && (!performanceStart || !performanceEnd)) {
-          const today = localDate();
-          performanceStart = today.slice(0, 8) + '01';
-          performanceEnd = today;
+          performanceStart = currentRange.start;
+          performanceEnd = currentRange.end;
         }
+        document.querySelectorAll('#performanceRangeTabs button').forEach(item => item.classList.toggle('active', item === button));
         mountPerformanceRangePicker();
         refreshDashboard();
       }));
@@ -449,12 +449,11 @@
     function mountPerformanceRangePicker() {
       const target=document.getElementById('performanceRangePicker');
       const range=performanceRange();
-      const label=performanceRangeMode==='yearly' ? range.start.slice(0,4)+'年' : performanceRangeMode==='monthly' ? range.start.slice(0,7) : range.start+' 至 '+range.end;
+      const label=range.start+' 至 '+range.end;
       if (!window.React || !window.ReactDOM || !window.dayjs || !window.antd?.DatePicker) { target.innerHTML='<span class="performance-range-label">'+escapeHtml(label)+'</span>'; return; }
       const {DatePicker,ConfigProvider}=window.antd, locale=window.antd.locale?.zh_CN || window.antd.locales?.zh_CN || window.antd.zh_CN;
       if (!performancePickerRoot) performancePickerRoot=ReactDOM.createRoot(target);
-      if (performanceRangeMode !== 'custom') { performancePickerRoot.render(React.createElement('span',{className:'performance-range-label'},label)); return; }
-      const onChange=values=>{ if (!values || !values[0] || !values[1]) return; performanceStart=values[0].format('YYYY-MM-DD'); performanceEnd=values[1].format('YYYY-MM-DD'); refreshDashboard(); };
+      const onChange=values=>{ if (!values || !values[0] || !values[1]) return; performanceStart=values[0].format('YYYY-MM-DD'); performanceEnd=values[1].format('YYYY-MM-DD'); performanceRangeMode='custom'; document.querySelectorAll('#performanceRangeTabs button').forEach(item=>item.classList.toggle('active',item.dataset.mode==='custom')); mountPerformanceRangePicker(); refreshDashboard(); };
       const node=React.createElement(DatePicker.RangePicker,{value:[dayjs(range.start),dayjs(range.end)],allowClear:false,inputReadOnly:true,format:'YYYY-MM-DD',locale:zhDatePickerLocale(),popupClassName:'calendar-period-popup',getPopupContainer:()=>target,onChange});
       performancePickerRoot.render(ConfigProvider&&locale?React.createElement(ConfigProvider,{locale},node):node);
     }
