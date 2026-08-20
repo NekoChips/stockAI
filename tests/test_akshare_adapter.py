@@ -70,6 +70,14 @@ class FakeCatalogFallbackAKShare(FakeAKShare):
         return [{"code": "600519", "name": "贵州茅台"}]
 
 
+class FakeHistoryFallbackAKShare(FakeAKShare):
+    def fund_etf_hist_em(self, symbol, period, start_date, end_date, adjust):
+        raise RuntimeError("eastmoney history unavailable")
+
+    def fund_etf_hist_sina(self, symbol):
+        return [{"date": "2026-08-17", "open": "1.020", "close": "1.050", "high": "1.060", "low": "1.010", "volume": "12000", "amount": "12480.00"}]
+
+
 class AKShareAdapterTests(unittest.TestCase):
     def test_parse_realtime_quote_table(self):
         quote = parse_quote_table(FakeAKShare().fund_etf_spot_em(), "588170.SH", datetime(2026, 8, 17, 3, 30, 30, tzinfo=timezone.utc))
@@ -120,6 +128,14 @@ class AKShareAdapterTests(unittest.TestCase):
                 {"symbol": "600519.SH", "name": "贵州茅台", "asset_type": "stock"},
             ],
         )
+
+    def test_history_falls_back_to_sina_when_eastmoney_history_is_unavailable(self):
+        adapter = AKShareAdapter(ak_module=FakeHistoryFallbackAKShare())
+
+        bars = adapter.get_bars("588170.SH", start="20260801", end="20260817")
+
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(bars[0].close_price, Decimal("1.050"))
 
     def test_index_history_falls_back_to_tencent_source(self):
         fake = FakeIndexFallbackAKShare()

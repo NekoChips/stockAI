@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import List, Protocol
 
 from ..models import Bar
@@ -31,4 +32,13 @@ class MarketDataStore(Protocol):
         ...
 
     def search_instrument_catalog(self, query: str, limit: int = 12) -> list[dict[str, str]]:
+        ...
+
+    def save_daily_report(self, report: dict) -> None:
+        ...
+
+    def load_daily_reports(self, limit: int = 60, offset: int = 0) -> list[dict]:
+        ...
+
+    def load_daily_report(self, report_date: date | str) -> dict | None:
         ...

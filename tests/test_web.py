@@ -16,6 +16,8 @@ from stock_ai_agent.web import (
     build_dashboard_overview_payload,
     build_dashboard_payload,
     build_dashboard_performance_payload,
+    build_dashboard_reports_payload,
+    build_dashboard_report_payload,
     confirm_backtest_runs,
     remove_dashboard_watchlist_item,
     render_dashboard_html,
@@ -192,6 +194,22 @@ class WebDashboardTests(unittest.TestCase):
         self.assertEqual(set(calendar), {"profit_calendar"})
         self.assertEqual(set(backtests), {"backtest_runs"})
 
+    def test_daily_report_archive_has_summary_and_detail_boundaries(self):
+        config = load_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "dashboard.sqlite3")
+            store.save_daily_report({
+                "report_date": "2026-08-17", "status": "已归档", "summary": "今日无模拟成交。",
+                "account": {"total_asset": "1000000.00", "daily_pnl": "0.00", "daily_return": "0"},
+                "positions": [], "fills": [], "decisions": [],
+            })
+            archive = build_dashboard_reports_payload(store)
+            detail = build_dashboard_report_payload(store, date(2026, 8, 17))
+
+        self.assertEqual(set(archive), {"daily_reports"})
+        self.assertNotIn("positions", archive["daily_reports"][0])
+        self.assertEqual(detail["daily_report"]["report_date"], "2026-08-17")
+
     def test_dashboard_performance_interval_is_normalized_from_selected_start(self):
         config = load_config()
         with tempfile.TemporaryDirectory() as tmp:
@@ -227,6 +245,7 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("/api/dashboard/performance", html)
         self.assertIn("/api/dashboard/calendar", html)
         self.assertIn("/api/dashboard/backtests", html)
+        self.assertIn("/api/dashboard/reports", html)
         self.assertNotIn("fetch('/api/dashboard' + performanceQuery())", html)
         self.assertIn("loadBacktests", html)
         self.assertIn("盈亏排行榜", html)
@@ -234,6 +253,11 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("calendarGrid", html)
         self.assertIn("交易看板", html)
         self.assertIn("回测记录", html)
+        self.assertIn("日报归档", html)
+        self.assertIn("dailyReportView", html)
+        self.assertIn("loadDailyReports", html)
+        self.assertIn("loadMoreDailyReports", html)
+        self.assertIn("dailyReportRows", html)
         self.assertIn("确认所选", html)
         self.assertIn("calendarPeriodPicker", html)
         self.assertIn("antd@5.29.3", html)

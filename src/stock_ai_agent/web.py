@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import gzip
 import json
-from threading import Thread
 from dataclasses import asdict, is_dataclass
 from datetime import date
 from decimal import Decimal
@@ -20,7 +19,6 @@ from .analytics import (
     fill_daily_snapshots,
 )
 from .config import AppConfig
-from .reference_data import sync_benchmark_history, sync_instrument_catalog
 from .universe import infer_asset_type, validate_hs_symbol
 from .watchlist import add_watchlist_item, effective_watchlist, remove_watchlist_item
 
@@ -181,6 +179,16 @@ def build_dashboard_backtests_payload(store) -> dict[str, Any]:
     return _to_jsonable({"backtest_runs": runs})
 
 
+def build_dashboard_reports_payload(store, limit: int = 60, offset: int = 0) -> dict[str, Any]:
+    reports = store.load_daily_reports(limit=limit, offset=offset) if hasattr(store, "load_daily_reports") else []
+    return _to_jsonable({"daily_reports": reports})
+
+
+def build_dashboard_report_payload(store, report_date: date) -> dict[str, Any]:
+    report = store.load_daily_report(report_date) if hasattr(store, "load_daily_report") else None
+    return _to_jsonable({"daily_report": report})
+
+
 def _performance_range(
     requested_start: date | None,
     requested_end: date | None,
@@ -269,18 +277,6 @@ def remove_dashboard_watchlist_item(config: AppConfig, store, symbol: str) -> di
     return _to_jsonable({"removed": removed, "watchlist": overview["watchlist"], "dashboard": overview})
 
 
-def _sync_dashboard_reference_data(config: AppConfig, store) -> None:
-    """Warm the local catalog and benchmark cache without delaying the dashboard."""
-    try:
-        sync_instrument_catalog(config, store)
-    except Exception:
-        pass
-    try:
-        sync_benchmark_history(config, store)
-    except Exception:
-        pass
-
-
 def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -315,6 +311,30 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 return
             if request.path == "/api/dashboard/backtests":
                 payload = build_dashboard_backtests_payload(store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard/reports":
+                query = parse_qs(request.query)
+                try:
+                    limit = min(200, max(1, int(query.get("limit", ["60"])[0])))
+                    offset = max(0, int(query.get("offset", ["0"])[0]))
+                except ValueError:
+                    _send_error(self, 400, "limit 和 offset 必须是整数。")
+                    return
+                payload = build_dashboard_reports_payload(store, limit, offset)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            report_prefix = "/api/dashboard/reports/"
+            if request.path.startswith(report_prefix):
+                try:
+                    report_date = date.fromisoformat(unquote(request.path[len(report_prefix):]))
+                except ValueError:
+                    _send_error(self, 400, "日报日期必须使用 YYYY-MM-DD 格式。")
+                    return
+                payload = build_dashboard_report_payload(store, report_date)
+                if payload["daily_report"] is None:
+                    _send_error(self, 404, "未找到该日期的日报。")
+                    return
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             if request.path == "/api/dashboard":
@@ -384,7 +404,6 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
         def log_message(self, fmt: str, *args) -> None:
             return
 
-    Thread(target=_sync_dashboard_reference_data, args=(config, store), daemon=True).start()
     server = ThreadingHTTPServer((host, port), DashboardHandler)
     server.serve_forever()
     return server

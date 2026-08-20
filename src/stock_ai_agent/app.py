@@ -12,7 +12,7 @@ from .backtest import BacktestResult, optimize_strategy_parameters
 from .config import AppConfig, load_config
 from .data.providers import create_history_data_provider, create_market_data_provider
 from .features import build_features
-from .journal import generate_daily_report
+from .journal import build_daily_report
 from .models import Bar, Decision, Fill, Portfolio
 from .monitor import RealTimePaperTradingMonitor
 from .paper_broker import PaperBroker, PaperBrokerError
@@ -41,7 +41,7 @@ class RunResult:
     portfolio: Portfolio
     decisions: List[Decision]
     fills: List[Fill]
-    report_path: Optional[Path] = None
+    report: Optional[dict] = None
 
 
 def create_market_data_store(config: AppConfig) -> MarketDataStore:
@@ -57,7 +57,6 @@ def run_once(
     bars_by_symbol: Dict[str, List[Bar]],
     histories: Dict[str, List[Decimal]],
     quote_provider=None,
-    output_dir: str | Path = "reports",
     report_date: Optional[date] = None,
 ) -> RunResult:
     universe = Universe.from_config(config.universe)
@@ -67,11 +66,12 @@ def run_once(
     quote_provider = quote_provider or create_market_data_provider(config)
     decisions: List[Decision] = []
     fills: List[Fill] = []
+    minimum_history_bars = int(config.data.history.get("monitor_minimum_bars", 35))
 
     for instrument in universe.instruments:
         quote = quote_provider.get_quote(instrument.symbol)
         bars = bars_by_symbol.get(instrument.symbol)
-        if not bars:
+        if not bars or len(bars) < minimum_history_bars:
             continue
         features = build_features(instrument.symbol, bars, quote)
         current_weights = {symbol: portfolio.position_weight(symbol) for symbol in portfolio.positions}
@@ -108,15 +108,21 @@ def run_once(
                     )
                 )
 
-    path = generate_daily_report(report_date or date.today(), portfolio, decisions, fills, output_dir)
-    return RunResult(portfolio, decisions, fills, path)
+    report = build_daily_report(
+        report_date or date.today(),
+        portfolio,
+        decisions,
+        fills,
+        config.paper_account.initial_cash,
+        status="临时运行",
+    )
+    return RunResult(portfolio, decisions, fills, report)
 
 
 def run_once_from_store(
     config: AppConfig,
     store: MarketDataStore,
     quote_provider=None,
-    output_dir: str | Path = "reports",
     report_date: Optional[date] = None,
     history_limit: int = 80,
 ) -> RunResult:
@@ -130,7 +136,7 @@ def run_once_from_store(
         symbol: [bar.close_price for bar in bars]
         for symbol, bars in bars_by_symbol.items()
     }
-    return run_once(config, bars_by_symbol, histories, quote_provider, output_dir, report_date)
+    return run_once(config, bars_by_symbol, histories, quote_provider, report_date)
 
 
 def sync_history(config: AppConfig, store: MarketDataStore, adapter=None) -> dict[str, int]:
@@ -145,7 +151,8 @@ def sync_history(config: AppConfig, store: MarketDataStore, adapter=None) -> dic
     counts: dict[str, int] = {}
     for instrument in universe.instruments:
         bars = adapter.get_bars(instrument.symbol, interval=interval, start=start, end=end, adjust=adjust)
-        counts[instrument.symbol] = store.save_bars(bars, interval=interval, source=config.data.history_provider)
+        source = getattr(adapter, "last_source", "") or config.data.history_provider
+        counts[instrument.symbol] = store.save_bars(bars, interval=interval, source=source)
     return counts
 
 
@@ -175,8 +182,8 @@ def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> o
     return result
 
 
-def post_close(portfolio: Portfolio, decisions: Iterable[Decision], fills: Iterable[Fill], output_dir: str | Path = "reports", report_date: Optional[date] = None) -> Path:
-    return generate_daily_report(report_date or date.today(), portfolio, decisions, fills, output_dir)
+def post_close(portfolio: Portfolio, decisions: Iterable[Decision], fills: Iterable[Fill], report_date: Optional[date] = None) -> dict:
+    return build_daily_report(report_date or date.today(), portfolio, decisions, fills)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -187,7 +194,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="同步行情、备份或恢复数据、运行模拟、实时盯盘、收盘日报、回测优化或启动 Web",
     )
     parser.add_argument("--config", default="config/default.yaml", help="配置文件路径")
-    parser.add_argument("--reports", default="reports", help="日报输出目录")
     parser.add_argument("--poll-seconds", type=int, default=None, help="实时盯盘轮询间隔秒数，默认读取配置")
     parser.add_argument("--max-iterations", type=int, default=None, help="实时盯盘最多执行轮数，默认持续运行")
     parser.add_argument("--ignore-market-hours", action="store_true", help="忽略 A 股交易时段限制，便于本地验证")
@@ -248,19 +254,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if args.command == "run-once":
         try:
-            result = run_once_from_store(config, store, output_dir=args.reports)
+            result = run_once_from_store(config, store)
         except Exception as exc:
             print(f"模拟运行失败：{exc}", file=sys.stderr)
             return 1
-        print(f"已完成一次模拟运行，生成日报：{result.report_path}")
+        print(f"已完成一次临时模拟运行：{result.report['report_date']}（不会覆盖正式日报归档）")
         return 0
     if args.command == "monitor":
-        monitor = RealTimePaperTradingMonitor(config, store, output_dir=args.reports)
+        monitor = RealTimePaperTradingMonitor(config, store)
 
         def print_update(result) -> None:
             detail = f"；本轮成交 {len(result.fills)} 笔，决策 {len(result.decisions)} 条"
-            if result.report_path:
-                detail = f"；日报：{result.report_path}"
+            if result.report:
+                detail = f"；日报归档：{result.report['report_date']}"
             print(f"{result.status}：{result.message}{detail}")
 
         try:
@@ -293,9 +299,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"启动 Web 驾驶舱失败：{exc}", file=sys.stderr)
             return 1
         return 0
-    monitor = RealTimePaperTradingMonitor(config, store, output_dir=args.reports)
-    path = monitor.generate_post_close_report()
-    print(f"已生成本地 Markdown 收盘日报：{path}")
+    monitor = RealTimePaperTradingMonitor(config, store)
+    report = monitor.generate_post_close_report()
+    print(f"收盘日报已归档到数据库：{report['report_date']}")
     return 0
 
 

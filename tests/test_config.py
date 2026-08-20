@@ -13,6 +13,7 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.data.provider, "akshare")
         self.assertEqual(config.data.history_provider, "akshare")
+        self.assertEqual(config.data.history_fallback_providers, ["eastmoney_public"])
         self.assertEqual(config.data.providers["akshare"]["fund_spot_function"], "fund_etf_spot_em")
         self.assertEqual(config.storage.driver, "sqlite")
         self.assertEqual(config.environment, "development")

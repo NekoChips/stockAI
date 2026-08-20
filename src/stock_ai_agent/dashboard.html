@@ -200,6 +200,37 @@
     .param-list { display:flex; flex-wrap:wrap; gap:5px; }
     .param-pill { padding:3px 6px; border:1px solid var(--line); border-radius:4px; background:#f8fafc; color:var(--subtle); font:500 11px/1.25 "Fira Code","SFMono-Regular",monospace; }
     .backtest-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 20px; border-bottom:1px solid #edf1f6; flex-wrap:wrap; }
+    .report-shell { display:grid; grid-template-columns:minmax(240px,300px) minmax(0,1fr); gap:20px; align-items:start; }
+    .report-archive { position:sticky; top:132px; overflow:hidden; }
+    .report-list { max-height:calc(100dvh - 220px); overflow-y:auto; scrollbar-color:#bdcce0 transparent; scrollbar-width:thin; }
+    .report-list-item { width:100%; min-height:88px; padding:14px 16px; border:0; border-bottom:1px solid #edf1f6; background:#fff; color:var(--ink); text-align:left; transition:background 160ms var(--ease), box-shadow 160ms var(--ease); }
+    .report-list-item:last-child { border-bottom:0; }
+    .report-list-item:hover { background:#f8fbff; }
+    .report-list-item.active { background:var(--blue-wash); box-shadow:inset 4px 0 0 var(--blue); }
+    .report-load-more { width:calc(100% - 24px); margin:12px; }
+    .report-list-top, .report-list-meta { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .report-list-date { font:700 14px/1.2 "Fira Code","SFMono-Regular",monospace; font-variant-numeric:tabular-nums; }
+    .report-list-meta { margin-top:9px; color:var(--subtle); font-size:12px; }
+    .report-detail { overflow:hidden; }
+    .report-hero { display:grid; grid-template-columns:minmax(0,1.5fr) repeat(3,minmax(120px,.7fr)); border-bottom:1px solid #edf1f6; }
+    .report-summary, .report-metric { min-width:0; padding:18px 20px; border-right:1px solid #edf1f6; }
+    .report-metric:last-child { border-right:0; }
+    .report-date { margin-top:5px; font:720 24px/1.2 "Fira Code","SFMono-Regular",monospace; }
+    .report-summary p { margin:8px 0 0; color:var(--subtle); font-size:13px; overflow-wrap:anywhere; }
+    .report-metric strong { display:block; margin-top:7px; font:700 16px/1.25 "Fira Code","SFMono-Regular",monospace; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    .report-section { padding:20px; border-bottom:1px solid #edf1f6; }
+    .report-section:last-child { border-bottom:0; }
+    .report-section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+    .report-section h3 { margin:0; font-size:15px; line-height:1.3; }
+    .report-count { color:var(--subtle); font:600 12px/1 "Fira Code","SFMono-Regular",monospace; }
+    .report-decision-list { display:grid; gap:10px; }
+    .report-decision { padding:14px 0; border-top:1px solid #edf1f6; }
+    .report-decision:first-child { padding-top:0; border-top:0; }
+    .report-decision-top { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .report-decision-copy { margin:7px 0 0; color:var(--subtle); font-size:13px; overflow-wrap:anywhere; }
+    .evidence-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
+    .evidence-item { padding:4px 7px; border:1px solid #d5e2f4; border-radius:4px; background:#f8fbff; color:#365a86; font-size:11px; }
+    .report-loading { display:grid; place-items:center; min-height:320px; padding:32px; color:var(--subtle); text-align:center; }
     .muted, .empty { color:var(--subtle); font-size:13px; }
     .empty { padding:24px 20px; text-align:center; }
     .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
@@ -273,6 +304,17 @@
       .activity-item { border-right:0; border-bottom:1px solid #edf1f6; }
       .activity-item:last-child { border-bottom:0; }
       .backtest-toolbar { padding-right:16px; padding-left:16px; }
+      .report-shell { grid-template-columns:1fr; }
+      .report-archive { position:static; }
+      .report-list { display:flex; max-height:none; overflow-x:auto; overflow-y:hidden; scroll-snap-type:x proximity; }
+      .report-list-item { flex:0 0 min(260px,82vw); border-right:1px solid #edf1f6; border-bottom:0; scroll-snap-align:start; }
+      .report-list-item.active { box-shadow:inset 0 -4px 0 var(--blue); }
+      .report-load-more { flex:0 0 144px; width:auto; margin:12px; }
+      .report-hero { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .report-summary { grid-column:1 / -1; border-right:0; border-bottom:1px solid #edf1f6; }
+      .report-metric:nth-child(3) { border-right:0; }
+      .report-metric:last-child { grid-column:1 / -1; border-top:1px solid #edf1f6; }
+      .report-section { padding:18px 16px; }
       .instrument-drawer { width:100%; height:auto; max-height:82vh; margin-top:auto; border-radius:10px 10px 0 0; transform:translateY(100%); }
       .drawer-backdrop.open .instrument-drawer { transform:translateY(0); }
     }
@@ -306,6 +348,7 @@
     <nav class="view-tabs" id="appTabs" role="tablist" aria-label="工作区">
       <button class="view-tab active" id="dashboardTab" type="button" role="tab" aria-selected="true" aria-controls="dashboardView" data-view="dashboardView">交易看板</button>
       <button class="view-tab" id="backtestTab" type="button" role="tab" aria-selected="false" aria-controls="backtestView" data-view="backtestView">回测记录</button>
+      <button class="view-tab" id="dailyReportTab" type="button" role="tab" aria-selected="false" aria-controls="dailyReportView" data-view="dailyReportView">日报归档</button>
     </nav>
   </header>
   <main id="mainContent" tabindex="-1">
@@ -343,6 +386,12 @@
     <div class="view hidden" id="backtestView" role="tabpanel" aria-labelledby="backtestTab">
       <section class="panel" aria-labelledby="backtestTitle"><div class="panel-head"><div class="panel-title"><span class="panel-title-mark" aria-hidden="true"></span><div><h2 id="backtestTitle">回测记录</h2><p class="panel-note">策略参数只在人工确认后才可进入下一轮评估</p></div></div></div><div class="backtest-toolbar"><span class="muted">确认不会自动替换当前实时策略。</span><button class="primary-button" id="confirmSelectedBtn" type="button" onclick="confirmSelectedBacktests()"><i data-lucide="check-check" aria-hidden="true"></i>确认所选</button></div><div id="backtests"></div></section>
     </div>
+    <div class="view hidden" id="dailyReportView" role="tabpanel" aria-labelledby="dailyReportTab" tabindex="-1">
+      <div class="report-shell">
+        <aside class="panel report-archive" aria-labelledby="reportArchiveTitle"><div class="panel-head"><div class="panel-title"><span class="panel-title-mark" aria-hidden="true"></span><div><h2 id="reportArchiveTitle">日报归档</h2><p class="panel-note">按交易日回看策略执行</p></div></div><span class="panel-count" id="reportArchiveCount">准备中</span></div><div class="report-list" id="dailyReportList"><div class="report-loading">正在读取归档...</div></div></aside>
+        <section class="panel report-detail" id="dailyReportDetail" aria-live="polite"><div class="report-loading">选择一份日报查看账户、持仓、成交与决策逻辑。</div></section>
+      </div>
+    </div>
   </main>
   <div class="drawer-backdrop" id="instrumentDrawerBackdrop" aria-hidden="true" onclick="closeInstrumentDrawer(event)">
     <aside class="instrument-drawer" role="dialog" aria-modal="true" aria-labelledby="instrumentDrawerTitle" onclick="event.stopPropagation()">
@@ -360,7 +409,8 @@
     const seriesStyle = [{color:'#1769e0',dash:[],label:'AI-Agent'}, {color:'#a9640f',dash:[7,4]}, {color:'#7b61a8',dash:[3,3]}, {color:'#187a65',dash:[10,4]}, {color:'#536b91',dash:[2,4]}, {color:'#b5474d',dash:[8,3,2,3]}];
     let latestData = null, rankRows = [], sortKey = 'profit_amount', sortAsc = false, chartMode = 'return', performanceRangeMode = 'yearly', performanceStart = null, performanceEnd = null, performancePickerRoot = null, calendarMode = 'monthly', calendarValueMode = 'amount', calendarPeriod = null, calendarPickerRoot = null, selectedInstrument = null, instrumentSearchTimer = null;
     let visibleSeries = new Set(), knownSeries = new Set(), chartState = null, chartFocusIndex = -1, loading = false, chartObserver = null;
-    let overviewPromise = null, performanceRequestId = 0, backtestsLoaded = false;
+    let overviewPromise = null, performanceRequestId = 0, backtestsLoaded = false, dailyReportsLoaded = false, dailyReportsLoading = false, selectedReportDate = null, dailyReportRows = [], dailyReportOffset = 0, dailyReportsHasMore = false;
+    const DAILY_REPORT_PAGE_SIZE = 30;
     let uiLibrariesPromise = null;
 
     function loadExternalScript(src) {
@@ -441,6 +491,39 @@
       renderBacktests(data);
       renderAccount(data);
     }
+    async function loadDailyReports(reset = true, quiet = false) {
+      if (dailyReportsLoading) return;
+      dailyReportsLoading=true;
+      try {
+        if (reset) { dailyReportOffset=0; dailyReportRows=[]; }
+        const payload=await fetchDashboardSection('/api/dashboard/reports?limit='+DAILY_REPORT_PAGE_SIZE+'&offset='+dailyReportOffset);
+        const incoming=payload.daily_reports || [];
+        dailyReportsLoaded=true;
+        dailyReportsHasMore=incoming.length===DAILY_REPORT_PAGE_SIZE;
+        dailyReportRows=reset ? incoming : [...dailyReportRows,...incoming.filter(item=>!dailyReportRows.some(row=>row.report_date===item.report_date))];
+        dailyReportOffset=dailyReportRows.length;
+        renderDailyReportList(dailyReportRows);
+        if (!dailyReportRows.length) { renderDailyReportDetail(null); return; }
+        if (!selectedReportDate || !dailyReportRows.some(item=>item.report_date===selectedReportDate)) selectedReportDate=dailyReportRows[0].report_date;
+        if (reset) await loadDailyReport(selectedReportDate, dailyReportRows, quiet);
+      } finally {
+        dailyReportsLoading=false;
+      }
+    }
+    async function loadMoreDailyReports() { await loadDailyReports(false); }
+    async function loadDailyReport(reportDate, reports = null, quiet = false) {
+      selectedReportDate=reportDate;
+      if (reports) renderDailyReportList(reports);
+      else document.querySelectorAll('[data-report-date]').forEach(item=>item.classList.toggle('active',item.dataset.reportDate===reportDate));
+      if (!quiet) document.getElementById('dailyReportDetail').innerHTML='<div class="report-loading">正在读取 '+escapeHtml(reportDate)+' 日报...</div>';
+      try {
+        const payload=await fetchDashboardSection('/api/dashboard/reports/'+encodeURIComponent(reportDate));
+        renderDailyReportDetail(payload.daily_report);
+      } catch (error) {
+        document.getElementById('dailyReportDetail').innerHTML='<div class="report-loading">日报读取失败，请稍后重试。</div>';
+        announce('日报详情读取失败。');
+      }
+    }
     async function load(manual = false) {
       if (loading) return;
       loading = true;
@@ -480,6 +563,7 @@
         document.querySelectorAll('.view').forEach(view => view.classList.toggle('hidden', view.id !== target));
         document.getElementById(target).focus({preventScroll:true});
         if (target === 'backtestView' && !backtestsLoaded) loadBacktests().catch(() => announce('回测记录读取失败，请稍后重试。'));
+        if (target === 'dailyReportView') loadDailyReports(true).catch(() => { renderDailyReportDetail(null,'日报归档读取失败，请稍后重试。'); announce('日报归档读取失败。'); });
       }));
       document.querySelectorAll('#chartTabs button').forEach(button => button.addEventListener('click', () => {
         chartMode = button.dataset.mode;
@@ -735,6 +819,24 @@
       const rows=runs.map(run=>{const confirmed=run.status==='已确认';return '<tr><td><input class="backtest-check" aria-label="选择 '+escapeHtml(run.strategy_id)+'" type="checkbox" value="'+run.id+'" '+(confirmed?'disabled':'')+'></td><td><div class="security-name">'+strategyName(run.strategy_id)+'</div><div class="security-code">'+escapeHtml(run.strategy_id)+'</div></td><td><div class="param-list">'+parameterPills(run.parameters)+'</div></td><td><span class="status-badge '+(confirmed?'confirmed':'')+'">'+escapeHtml(run.status)+'</span></td><td><button class="secondary-button" type="button" onclick="confirmBacktests(['+run.id+'])" '+(confirmed?'disabled':'')+'>确认</button></td></tr>';}).join('');
       document.getElementById('backtests').innerHTML='<div class="table-wrap"><table><thead><tr><th><input type="checkbox" aria-label="选择全部待确认记录" onchange="toggleAllBacktests(this.checked)"></th><th>策略</th><th>参数</th><th>状态</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
     }
+    function renderDailyReportList(reports) {
+      const target=document.getElementById('dailyReportList');
+      document.getElementById('reportArchiveCount').textContent=reports.length+' 份';
+      if (!reports.length) { target.innerHTML='<div class="report-loading">暂无日报。交易日收盘后，monitor 会自动归档。</div>'; return; }
+      target.innerHTML=reports.map(item=>'<button class="report-list-item '+(item.report_date===selectedReportDate?'active':'')+'" type="button" data-report-date="'+escapeHtml(item.report_date)+'" aria-pressed="'+(item.report_date===selectedReportDate)+'"><span class="report-list-top"><span class="report-list-date">'+escapeHtml(item.report_date)+'</span><span class="status-badge confirmed">'+escapeHtml(item.status)+'</span></span><span class="report-list-meta"><span class="'+tone(item.daily_pnl)+'">'+fmtMoney(item.daily_pnl)+' 元</span><span>'+fmtPct(item.daily_return)+'</span></span></button>').join('')+(dailyReportsHasMore?'<button class="secondary-button report-load-more" type="button" onclick="loadMoreDailyReports()">加载更早日报</button>':'');
+      target.querySelectorAll('[data-report-date]').forEach(button=>button.addEventListener('click',()=>loadDailyReport(button.dataset.reportDate,reports)));
+    }
+    function renderDailyReportDetail(report, message = '') {
+      const target=document.getElementById('dailyReportDetail');
+      if (!report) { target.innerHTML='<div class="report-loading">'+escapeHtml(message || '暂无已归档日报。收盘后将自动生成结构化复盘。')+'</div>'; return; }
+      const account=report.account || {}, positions=report.positions || [], fills=report.fills || [], decisions=report.decisions || [], systemNotes=report.system_notes || [], displayedDecisions=decisions.slice(-50).reverse();
+      const positionRows=positions.length ? positions.map(item=>'<tr><td><div class="security-name">'+escapeHtml(item.symbol)+'</div></td><td>'+item.quantity+'</td><td>'+fmtMoney(item.average_cost)+'</td><td>'+fmtMoney(item.last_price)+'</td><td>'+fmtMoney(item.market_value)+'</td><td class="'+tone(item.unrealized_pnl)+'">'+fmtMoney(item.unrealized_pnl)+'</td><td>'+fmtPct(item.position_weight)+'</td></tr>').join('') : '<tr><td colspan="7" class="empty">收盘时没有持仓。</td></tr>';
+      const fillRows=fills.length ? fills.map(item=>'<tr><td>'+escapeHtml(item.timestamp.slice(11,19))+'</td><td>'+escapeHtml(item.symbol)+'</td><td><span class="status-badge '+((item.direction==='卖出'||item.direction==='减仓'||item.direction==='清仓')?'confirmed':'')+'">'+escapeHtml(item.direction)+'</span></td><td>'+item.quantity+'</td><td>'+fmtMoney(item.price)+'</td><td>'+fmtMoney(item.fee)+'</td></tr>').join('') : '<tr><td colspan="6" class="empty">当日没有模拟成交。</td></tr>';
+      const decisionRows=displayedDecisions.length ? displayedDecisions.map(item=>'<article class="report-decision"><div class="report-decision-top"><strong>'+escapeHtml(item.direction)+' · '+escapeHtml(item.symbol)+'</strong><span class="status-badge '+(item.approved?'confirmed':'')+'">'+(item.approved?'风控通过':'未执行')+'</span></div><p class="report-decision-copy">'+escapeHtml(item.explanation || (item.risk_reasons || []).join('；') || '策略未提供补充说明。')+'</p><div class="evidence-list">'+(item.evidence || []).map(text=>'<span class="evidence-item">依据 · '+escapeHtml(text)+'</span>').join('')+(item.objections || []).map(text=>'<span class="evidence-item">约束 · '+escapeHtml(text)+'</span>').join('')+'</div></article>').join('') : '<div class="empty">当日没有策略决策记录。</div>';
+      const noteSection=systemNotes.length?'<section class="report-section"><div class="report-section-head"><h3>运行备注</h3><span class="report-count">'+systemNotes.length+' 条</span></div><div class="report-decision-list">'+systemNotes.map(text=>'<p class="report-decision-copy">'+escapeHtml(text)+'</p>').join('')+'</div></section>':'';
+      target.innerHTML='<div class="report-hero"><div class="report-summary"><span class="kicker">交易日报</span><div class="report-date">'+escapeHtml(report.report_date)+'</div><p>'+escapeHtml(report.summary)+'</p></div><div class="report-metric"><span class="kicker">总资产</span><strong>'+fmtMoney(account.total_asset)+' 元</strong></div><div class="report-metric"><span class="kicker">当日收益</span><strong class="'+tone(account.daily_pnl)+'">'+fmtMoney(account.daily_pnl)+' 元</strong></div><div class="report-metric"><span class="kicker">当日收益率</span><strong class="'+tone(account.daily_return)+'">'+fmtPct(account.daily_return)+'</strong></div></div>'+noteSection+'<section class="report-section"><div class="report-section-head"><h3>收盘持仓</h3><span class="report-count">'+positions.length+' 个标的 · 仓位 '+fmtPct(account.position_ratio)+'</span></div><div class="table-wrap"><table><thead><tr><th>证券</th><th>数量</th><th>成本</th><th>收盘价</th><th>市值</th><th>浮动盈亏</th><th>仓位</th></tr></thead><tbody>'+positionRows+'</tbody></table></div></section><section class="report-section"><div class="report-section-head"><h3>模拟成交</h3><span class="report-count">'+fills.length+' 笔</span></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>证券</th><th>操作</th><th>数量</th><th>成交价</th><th>手续费</th></tr></thead><tbody>'+fillRows+'</tbody></table></div></section><section class="report-section"><div class="report-section-head"><h3>决策逻辑</h3><span class="report-count">'+decisions.length+' 条'+(decisions.length>displayedDecisions.length?' · 展示最近 50 条':'')+'</span></div><div class="report-decision-list">'+decisionRows+'</div></section>';
+      iconify();
+    }
     function strategyName(id) { return {momentum_grid:'动量网格策略',mean_reversion_grid:'均值回归策略',relative_strength:'相对强弱轮动'}[id] || escapeHtml(id); }
     function parameterPills(parameters) { return Object.entries(parameters || {}).map(([key,value])=>'<span class="param-pill">'+escapeHtml(key)+'：'+escapeHtml(value)+'</span>').join(''); }
     function toggleAllBacktests(checked) { document.querySelectorAll('.backtest-check:not(:disabled)').forEach(item=>item.checked=checked); }
@@ -750,7 +852,7 @@
     iconify();
     const initialDashboardLoad = load();
     initialDashboardLoad.finally(loadOptionalUiLibraries);
-    window.setInterval(() => loadOverview().catch(() => setNotice('无法读取交易数据，请检查本地服务后重试。')),30000);
+    window.setInterval(() => { loadOverview().catch(() => setNotice('无法读取交易数据，请检查本地服务后重试。')); if (dailyReportsLoaded) loadDailyReports(true,true).catch(()=>announce('日报归档自动刷新失败。')); },30000);
   </script>
 </body>
 </html>

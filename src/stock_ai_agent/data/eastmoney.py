@@ -191,6 +191,16 @@ class EastmoneyPublicAdapter:
     ) -> List[Bar]:
         return self.get_bars(symbol=symbol, interval="daily", start=start, end=end, adjust=adjust)
 
+    def get_index_bars(
+        self,
+        symbol: str,
+        akshare_symbol: str,
+        start: str = "20240101",
+        end: str = "20500101",
+    ) -> List[Bar]:
+        del akshare_symbol
+        return self.get_bars(symbol=symbol, interval="daily", start=start, end=end, adjust="none")
+
     def get_bars(
         self,
         symbol: str,

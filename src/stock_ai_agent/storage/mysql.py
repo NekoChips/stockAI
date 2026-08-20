@@ -98,6 +98,12 @@ class MySQLMarketDataStore:
                 id BIGINT AUTO_INCREMENT PRIMARY KEY, strategy_id VARCHAR(128) NOT NULL, parameters TEXT NOT NULL,
                 metrics TEXT NOT NULL, status VARCHAR(32) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
+            """CREATE TABLE IF NOT EXISTS daily_reports (
+                report_date VARCHAR(16) PRIMARY KEY, status VARCHAR(32) NOT NULL, summary TEXT NOT NULL,
+                total_asset VARCHAR(40) NOT NULL, daily_pnl VARCHAR(40) NOT NULL, daily_return VARCHAR(40) NOT NULL,
+                report_data LONGTEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) CHARACTER SET utf8mb4""",
         ]
         with self._connect() as conn:
             with conn.cursor() as cursor:
@@ -247,6 +253,48 @@ class MySQLMarketDataStore:
             return 0
         placeholders = ",".join(["%s"] * len(ids))
         return self._execute(f"UPDATE backtest_runs SET status=%s WHERE id IN ({placeholders})", (status, *ids))
+
+    def save_daily_report(self, report: dict) -> None:
+        self.initialize()
+        account = report.get("account") or {}
+        self._execute(
+            """INSERT INTO daily_reports (report_date, status, summary, total_asset, daily_pnl, daily_return, report_data)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               ON DUPLICATE KEY UPDATE status=VALUES(status), summary=VALUES(summary), total_asset=VALUES(total_asset),
+               daily_pnl=VALUES(daily_pnl), daily_return=VALUES(daily_return), report_data=VALUES(report_data),
+               updated_at=CURRENT_TIMESTAMP""",
+            (
+                str(report["report_date"]),
+                str(report.get("status") or "已归档"),
+                str(report.get("summary") or ""),
+                str(account.get("total_asset") or "0"),
+                str(account.get("daily_pnl") or "0"),
+                str(account.get("daily_return") or "0"),
+                _dumps_obj(report),
+            ),
+        )
+
+    def load_daily_reports(self, limit: int = 60, offset: int = 0) -> list[dict]:
+        self.initialize()
+        rows = self._fetchall(
+            """SELECT report_date, status, summary, total_asset, daily_pnl, daily_return, updated_at
+               FROM daily_reports ORDER BY report_date DESC LIMIT %s OFFSET %s""",
+            (max(1, int(limit)), max(0, int(offset))),
+        )
+        return [
+            {
+                "report_date": row[0], "status": row[1], "summary": row[2], "total_asset": row[3],
+                "daily_pnl": row[4], "daily_return": row[5],
+                "updated_at": row[6].isoformat() if hasattr(row[6], "isoformat") else row[6],
+            }
+            for row in rows
+        ]
+
+    def load_daily_report(self, report_date: date | str) -> dict | None:
+        self.initialize()
+        key = report_date.isoformat() if isinstance(report_date, date) else str(report_date)
+        row = self._fetchone("SELECT report_data FROM daily_reports WHERE report_date=%s", (key,))
+        return json.loads(row[0]) if row else None
 
     def settle_t_plus_one(self, settle_date: date | None = None) -> bool:
         self.initialize()

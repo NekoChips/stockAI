@@ -48,9 +48,10 @@ def sync_benchmark_history(config: AppConfig, store: Any, adapter=None) -> dict[
     counts: dict[str, int] = {}
     for benchmark in config.benchmarks:
         bars = adapter.get_index_bars(benchmark.symbol, benchmark.akshare_symbol, start=start, end=end)
+        source = getattr(adapter, "last_source", "") or config.data.history_provider
         counts[benchmark.symbol] = store.save_bars(
             bars,
             interval="daily",
-            source=f"{config.data.history_provider}_benchmark",
+            source=f"{source}_benchmark",
         )
     return counts

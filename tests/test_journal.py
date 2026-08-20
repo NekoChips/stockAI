@@ -1,14 +1,13 @@
-import tempfile
 import unittest
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from stock_ai_agent.journal import generate_daily_report
+from stock_ai_agent.journal import build_daily_report
 from stock_ai_agent.models import Decision, Direction, Fill, Portfolio, Position, StrategySignal
 
 
 class JournalTests(unittest.TestCase):
-    def test_daily_report_contains_chinese_sections_and_strategy_evidence(self):
+    def test_daily_report_is_structured_and_contains_strategy_evidence(self):
         portfolio = Portfolio(Decimal("990000"), {"588170.SH": Position("588170.SH", 10000, 0, Decimal("1.00"), Decimal("1.10"))})
         signal = StrategySignal(
             "strategy_aggregator",
@@ -24,28 +23,30 @@ class JournalTests(unittest.TestCase):
         decision = Decision("588170.SH", Direction.BUY, Decimal("0.20"), True, ["风控通过"], signal)
         fill = Fill("588170.SH", Direction.BUY, 10000, Decimal("1.00"), Decimal("3"), Decimal("5"), datetime.now(timezone.utc))
 
-        with tempfile.TemporaryDirectory() as tmp:
-            path = generate_daily_report(date(2026, 8, 17), portfolio, [decision], [fill], tmp)
-            content = path.read_text(encoding="utf-8")
+        report = build_daily_report(
+            date(2026, 8, 17),
+            portfolio,
+            [decision],
+            [fill],
+            previous_total_asset=Decimal("1000000"),
+        )
 
-        self.assertEqual(path.name, "daily_reports.md")
-        self.assertIn("# 2026-08-17 A股模拟盘日报", content)
-        self.assertIn("账户概览", content)
-        self.assertIn("当前持仓", content)
-        self.assertIn("今日操作", content)
-        self.assertIn("执行逻辑与策略证据", content)
-        self.assertIn("时间序列动量", content)
+        self.assertEqual(report["report_date"], "2026-08-17")
+        self.assertEqual(report["status"], "已归档")
+        self.assertEqual(report["account"]["daily_pnl"], "1000.00")
+        self.assertEqual(report["positions"][0]["symbol"], "588170.SH")
+        self.assertEqual(report["fills"][0]["direction"], "买入")
+        self.assertTrue(any("时间序列动量" in item for item in report["decisions"][0]["evidence"]))
+        self.assertIn("买入", report["summary"])
 
-    def test_daily_report_replaces_same_date_and_appends_new_dates(self):
+    def test_empty_daily_report_explains_that_no_trade_was_executed(self):
         portfolio = Portfolio(Decimal("1000000"))
-        with tempfile.TemporaryDirectory() as tmp:
-            path = generate_daily_report(date(2026, 8, 17), portfolio, [], [], tmp)
-            generate_daily_report(date(2026, 8, 17), portfolio, [], [], tmp)
-            generate_daily_report(date(2026, 8, 18), portfolio, [], [], tmp)
-            content = path.read_text(encoding="utf-8")
+        report = build_daily_report(date(2026, 8, 17), portfolio, [], [])
 
-        self.assertEqual(content.count("# 2026-08-17 A股模拟盘日报"), 1)
-        self.assertEqual(content.count("# 2026-08-18 A股模拟盘日报"), 1)
+        self.assertEqual(report["positions"], [])
+        self.assertEqual(report["fills"], [])
+        self.assertEqual(report["decisions"], [])
+        self.assertIn("没有模拟成交", report["summary"])
 
 
 if __name__ == "__main__":

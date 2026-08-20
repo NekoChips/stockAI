@@ -64,10 +64,11 @@ class AppHistoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "market.sqlite3")
             sync_history(config, store, MockHistoryAdapter())
-            result = run_once_from_store(config, store, MockQuoteProvider(), tmp)
+            result = run_once_from_store(config, store, MockQuoteProvider())
 
             self.assertGreaterEqual(len(result.decisions), 1)
-            self.assertTrue(result.report_path.exists())
+            self.assertEqual(result.report["status"], "临时运行")
+            self.assertIsNone(store.load_daily_report(result.report["report_date"]))
 
 
 if __name__ == "__main__":

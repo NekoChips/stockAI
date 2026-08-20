@@ -9,7 +9,7 @@ StockAI 是面向沪深 A 股股票与 ETF 的模拟盘 AI-Agent。它使用公�
 - 仅支持沪深 A 股股票与 ETF，默认观察 `588170.SH` 和 `588200.SH`。
 - 使用 AKShare 获取实时行情、历史 K 线、证券目录和指数数据。
 - 在交易时段执行技术指标与量化策略，经过风控后写入模拟成交和持仓。
-- 提供收盘日报、收益与指数对比、盈亏日历、盈亏排行榜和回测记录。
+- 提供数据库日报归档、收益与指数对比、盈亏日历、盈亏排行榜和回测记录。
 - Web 看板支持观察池搜索、添加/删除标的，以及回测候选的人工确认。
 - 发布版使用 MySQL，镜像通过 GitHub Container Registry 发布。
 
@@ -48,7 +48,7 @@ ghcr.io/nekochips/stockai:v0.1.1
 4. 如果宿主机 `8765` 端口已占用，将映射左侧端口改成其他端口，例如 `8876:8765`。
 5. 点击“立即部署”。
 
-`bootstrap` 是一次性初始化服务，完成证券目录、观察池历史 K 线和基准指数同步后正常退出；`web` 和 `monitor` 会持续运行。部署完成后访问：
+部署后 `web` 会立即提供页面，`monitor` 会在启动阶段自动同步证券目录、观察池历史 K 线和基准指数。观察池 K 线未达到策略计算所需数量时，monitor 不会执行策略或模拟交易，而是保留运行并自动重试。部署完成后访问：
 
 ```text
 http://NAS地址:8765
@@ -95,7 +95,7 @@ docker compose up -d --pull always --force-recreate --remove-orphans
 
 ```bash
 docker compose ps -a
-docker compose logs --tail=100 bootstrap web monitor
+docker compose logs --tail=100 web monitor
 ```
 
 Web 服务提供轻量健康检查：
@@ -104,7 +104,9 @@ Web 服务提供轻量健康检查：
 http://部署机地址:8765/healthz
 ```
 
-`bootstrap` 正常完成后处于 `Exited (0)` 是预期状态。不要使用 `docker compose down -v`，以免误删持久化卷。MySQL 数据由数据库自身保存，Markdown 日报保存在 Compose 项目目录的 `reports/` 下。
+不要使用 `docker compose down -v`，以免误删其他持久化卷。持仓、决策、成交、K 线和日报归档均保存在 MySQL 中，项目不再生成 Markdown 日报文件。
+
+历史 K 线初始化默认先使用 AKShare；失败时会按配置重试并切换到备用公开源。所有源均失败时 monitor 会显示初始化告警并定时重试，避免 Agent 在缺少观察池数据时继续运行。
 
 ## 数据库配置
 

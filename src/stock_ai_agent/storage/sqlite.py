@@ -162,6 +162,21 @@ class SQLiteMarketDataStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daily_reports (
+                    report_date TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    total_asset TEXT NOT NULL,
+                    daily_pnl TEXT NOT NULL,
+                    daily_return TEXT NOT NULL,
+                    report_data TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
     def save_bars(self, bars: List[Bar], interval: str = "daily", source: str = "unknown") -> int:
         if not bars:
@@ -586,6 +601,70 @@ class SQLiteMarketDataStore:
                 [status, *ids],
             )
             return int(cursor.rowcount)
+
+    def save_daily_report(self, report: dict) -> None:
+        self.initialize()
+        account = report.get("account") or {}
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO daily_reports (
+                    report_date, status, summary, total_asset, daily_pnl, daily_return, report_data
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(report_date) DO UPDATE SET
+                    status=excluded.status,
+                    summary=excluded.summary,
+                    total_asset=excluded.total_asset,
+                    daily_pnl=excluded.daily_pnl,
+                    daily_return=excluded.daily_return,
+                    report_data=excluded.report_data,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (
+                    str(report["report_date"]),
+                    str(report.get("status") or "已归档"),
+                    str(report.get("summary") or ""),
+                    str(account.get("total_asset") or "0"),
+                    str(account.get("daily_pnl") or "0"),
+                    str(account.get("daily_return") or "0"),
+                    _json_dumps_obj(report),
+                ),
+            )
+
+    def load_daily_reports(self, limit: int = 60, offset: int = 0) -> list[dict]:
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT report_date, status, summary, total_asset, daily_pnl, daily_return, updated_at
+                FROM daily_reports
+                ORDER BY report_date DESC
+                LIMIT ? OFFSET ?
+                """,
+                (max(1, int(limit)), max(0, int(offset))),
+            ).fetchall()
+        return [
+            {
+                "report_date": row[0],
+                "status": row[1],
+                "summary": row[2],
+                "total_asset": row[3],
+                "daily_pnl": row[4],
+                "daily_return": row[5],
+                "updated_at": row[6],
+            }
+            for row in rows
+        ]
+
+    def load_daily_report(self, report_date: date | str) -> dict | None:
+        self.initialize()
+        key = report_date.isoformat() if isinstance(report_date, date) else str(report_date)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT report_data FROM daily_reports WHERE report_date = ?",
+                (key,),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
 
     def settle_t_plus_one(self, settle_date: date | None = None) -> bool:
         self.initialize()

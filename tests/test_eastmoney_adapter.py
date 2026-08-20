@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from stock_ai_agent.data.eastmoney import eastmoney_secid, parse_kline_response, parse_quote_response
+from stock_ai_agent.data.eastmoney import EastmoneyPublicAdapter, eastmoney_secid, parse_kline_response, parse_quote_response
 
 
 class EastmoneyAdapterTests(unittest.TestCase):
@@ -59,6 +59,27 @@ class EastmoneyAdapterTests(unittest.TestCase):
 
         self.assertEqual(quote.timestamp.year, 2026)
         self.assertEqual(quote.timestamp.tzinfo.key, "Asia/Shanghai")
+
+    def test_index_history_uses_public_kline_endpoint(self):
+        adapter = EastmoneyPublicAdapter()
+        adapter.get_bars = lambda symbol, interval, start, end, adjust: [symbol, interval, start, end, adjust]
+
+        bars = adapter.get_index_bars("000001.SH", "000001", start="20260101", end="20261231")
+
+        self.assertEqual(bars, ["000001.SH", "daily", "20260101", "20261231", "none"])
+
+    def test_index_history_accepts_shared_provider_keyword(self):
+        adapter = EastmoneyPublicAdapter()
+        adapter.get_bars = lambda symbol, interval, start, end, adjust: [symbol, interval, start, end, adjust]
+
+        bars = adapter.get_index_bars(
+            "000001.SH",
+            akshare_symbol="000001",
+            start="20260101",
+            end="20261231",
+        )
+
+        self.assertEqual(bars[0], "000001.SH")
 
 
 if __name__ == "__main__":

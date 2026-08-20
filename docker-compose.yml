@@ -13,8 +13,6 @@ x-stockai-service: &stockai-service
   restart: unless-stopped
   init: true
   stop_grace_period: 30s
-  volumes:
-    - ./reports:/app/reports
   logging:
     driver: json-file
     options:
@@ -22,16 +20,6 @@ x-stockai-service: &stockai-service
       max-file: "3"
 
 services:
-  bootstrap:
-    <<: *stockai-service
-    restart: "no"
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        python -m stock_ai_agent.app sync-instruments --config config/release.container.yaml || true
-        python -m stock_ai_agent.app sync-history --config config/release.container.yaml || true
-        python -m stock_ai_agent.app sync-benchmarks --config config/release.container.yaml || true
-
   monitor:
     <<: *stockai-service
     command: ["monitor", "--config", "config/release.container.yaml"]

@@ -253,15 +253,37 @@ class AKShareAdapter:
         period = PERIODS.get(interval, interval)
         adjust_value = ADJUSTS.get(adjust, adjust)
         if infer_asset_type(normalized) == "etf":
-            function_name = str(self.options.get("fund_history_function") or "fund_etf_hist_em")
+            primary = str(self.options.get("fund_history_function") or "fund_etf_hist_em")
+            fallback_names = self._fallback_function_names("fund_history_fallback_functions", ["fund_etf_hist_sina"])
         else:
-            function_name = str(self.options.get("stock_history_function") or "stock_zh_a_hist")
-        function = getattr(ak, function_name)
-        try:
-            table = function(symbol=code, period=period, start_date=start, end_date=end, adjust=adjust_value)
-        except TypeError:
-            table = function(symbol=code, period=period, start_date=start, end_date=end)
-        return parse_bars_table(table, normalized)
+            primary = str(self.options.get("stock_history_function") or "stock_zh_a_hist")
+            fallback_names = self._fallback_function_names("stock_history_fallback_functions", ["stock_zh_a_hist_tx"])
+        failures: List[str] = []
+        for function_name in dict.fromkeys([primary, *fallback_names]):
+            if not hasattr(ak, function_name):
+                failures.append(f"{function_name}: AKShare 中不存在该函数")
+                continue
+            function = getattr(ak, function_name)
+            try:
+                prefix = "sh" if normalized.endswith(".SH") else "sz"
+                if function_name == "fund_etf_hist_sina":
+                    table = function(symbol=f"{prefix}{code}")
+                elif function_name.endswith("_tx"):
+                    table = function(symbol=f"{prefix}{code}", start_date=start, end_date=end, adjust="")
+                else:
+                    try:
+                        table = function(symbol=code, period=period, start_date=start, end_date=end, adjust=adjust_value)
+                    except TypeError:
+                        table = function(symbol=code, period=period, start_date=start, end_date=end)
+                bars = parse_bars_table(table, normalized)
+                bars = _filter_bars_by_date(bars, start, end)
+            except Exception as exc:  # noqa: BLE001 - public providers raise mixed exceptions
+                failures.append(f"{function_name}: {exc}")
+                continue
+            if bars:
+                return bars
+            failures.append(f"{function_name}: 返回空数据")
+        raise AKShareError(f"AKShare 历史 K 线获取失败：{'；'.join(failures)}")
 
     def get_daily_bars(self, symbol: str, start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         return self.get_bars(symbol, "daily", start, end, adjust)

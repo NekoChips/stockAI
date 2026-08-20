@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -164,6 +164,22 @@ class SQLiteStorageTests(unittest.TestCase):
 
         self.assertEqual(changed, 2)
         self.assertEqual({run["status"] for run in runs}, {"已确认"})
+
+    def test_daily_reports_are_upserted_listed_and_loaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "reports.sqlite3")
+            first = {"report_date": "2026-08-17", "status": "已归档", "summary": "无操作", "account": {"daily_pnl": "0.00"}, "positions": [], "fills": [], "decisions": []}
+            updated = {**first, "summary": "已复盘", "account": {"daily_pnl": "120.00"}}
+            older = {**first, "report_date": "2026-08-16"}
+            store.save_daily_report(first)
+            store.save_daily_report(updated)
+            store.save_daily_report(older)
+            rows = store.load_daily_reports(limit=10)
+            detail = store.load_daily_report(date(2026, 8, 17))
+
+        self.assertEqual([row["report_date"] for row in rows], ["2026-08-17", "2026-08-16"])
+        self.assertEqual(rows[0]["daily_pnl"], "120.00")
+        self.assertEqual(detail["summary"], "已复盘")
 
 
 if __name__ == "__main__":

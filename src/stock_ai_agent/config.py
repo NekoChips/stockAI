@@ -27,6 +27,7 @@ class BenchmarkConfig:
 class DataConfig:
     provider: str
     history_provider: str
+    history_fallback_providers: List[str]
     freshness_seconds: int
     history: Dict[str, object]
     providers: Dict[str, Dict[str, object]]
@@ -136,6 +137,7 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
         data=DataConfig(
             provider=data["provider"],
             history_provider=data.get("history_provider", data["provider"]),
+            history_fallback_providers=[str(item) for item in data.get("history_fallback_providers", [])],
             freshness_seconds=int(data["freshness_seconds"]),
             history=dict(data.get("history", {})),
             providers={key: dict(value) for key, value in data.get("providers", {}).items()},

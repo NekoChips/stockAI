@@ -7,8 +7,6 @@ services:
       - docker/.env.release
     command: ["monitor", "--config", "config/release.container.yaml"]
     restart: unless-stopped
-    volumes:
-      - ./runtime/reports:/app/reports
 
   web:
     build:
@@ -20,5 +18,3 @@ services:
     restart: unless-stopped
     ports:
       - "${STOCK_AI_WEB_PORT:-8765}:8765"
-    volumes:
-      - ./runtime/reports:/app/reports

@@ -8,19 +8,26 @@
   "data": {
     "provider": "akshare",
     "history_provider": "akshare",
+    "history_fallback_providers": ["eastmoney_public"],
     "freshness_seconds": 90,
     "history": {
       "interval": "daily",
       "adjust": "qfq",
       "start": "20240101",
-      "end": "20500101"
+      "end": "20500101",
+      "monitor_minimum_bars": 35,
+      "monitor_history_limit": 80,
+      "retry_attempts": 2,
+      "retry_backoff_seconds": 1
     },
     "providers": {
       "akshare": {
         "stock_spot_function": "stock_zh_a_spot_em",
         "fund_spot_function": "fund_etf_spot_em",
         "stock_history_function": "stock_zh_a_hist",
+        "stock_history_fallback_functions": ["stock_zh_a_hist_tx"],
         "fund_history_function": "fund_etf_hist_em",
+        "fund_history_fallback_functions": ["fund_etf_hist_sina"],
         "index_history_function": "stock_zh_index_daily_tx",
         "index_history_fallback_functions": ["stock_zh_index_daily", "index_zh_a_hist"]
       },
