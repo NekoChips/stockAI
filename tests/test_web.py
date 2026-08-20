@@ -1,3 +1,4 @@
+import gzip
 import json
 import tempfile
 import unittest
@@ -10,15 +11,72 @@ from stock_ai_agent.models import Bar, Portfolio, Position
 from stock_ai_agent.storage.sqlite import SQLiteMarketDataStore
 from stock_ai_agent.web import (
     add_dashboard_watchlist_item,
+    build_dashboard_backtests_payload,
+    build_dashboard_calendar_payload,
+    build_dashboard_overview_payload,
     build_dashboard_payload,
+    build_dashboard_performance_payload,
     confirm_backtest_runs,
     remove_dashboard_watchlist_item,
     render_dashboard_html,
     search_watchlist_instruments,
+    _send,
 )
 
 
 class WebDashboardTests(unittest.TestCase):
+    def test_send_compresses_large_response_when_client_accepts_gzip(self):
+        class Writer:
+            def __init__(self):
+                self.body = b""
+
+            def write(self, body):
+                self.body = body
+
+        class Handler:
+            headers = {"Accept-Encoding": "gzip, deflate"}
+
+            def __init__(self):
+                self.wfile = Writer()
+                self.response_headers = {}
+
+            def send_response(self, status):
+                self.status = status
+
+            def send_header(self, name, value):
+                self.response_headers[name] = value
+
+            def end_headers(self):
+                pass
+
+        handler = Handler()
+        body = ("看板数据" * 1000).encode("utf-8")
+
+        _send(handler, "application/json; charset=utf-8", body)
+
+        self.assertEqual(handler.response_headers["Content-Encoding"], "gzip")
+        self.assertEqual(handler.response_headers["Vary"], "Accept-Encoding")
+        self.assertEqual(gzip.decompress(handler.wfile.body), body)
+
+    def test_send_ignores_client_disconnect(self):
+        class BrokenPipeWriter:
+            def write(self, body):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        class Handler:
+            wfile = BrokenPipeWriter()
+
+            def send_response(self, status):
+                self.status = status
+
+            def send_header(self, name, value):
+                pass
+
+            def end_headers(self):
+                pass
+
+        _send(Handler(), "application/json; charset=utf-8", b"{}")
+
     def test_catalog_resolves_code_name_and_removal_updates_dashboard(self):
         config = load_config()
         with tempfile.TemporaryDirectory() as tmp:
@@ -84,7 +142,14 @@ class WebDashboardTests(unittest.TestCase):
     def test_dashboard_payload_contains_core_sections(self):
         config = load_config()
         with tempfile.TemporaryDirectory() as tmp:
-            store = SQLiteMarketDataStore(Path(tmp) / "dashboard.sqlite3")
+            class CountingStore(SQLiteMarketDataStore):
+                snapshot_loads = 0
+
+                def load_portfolio_snapshots(self):
+                    self.snapshot_loads += 1
+                    return super().load_portfolio_snapshots()
+
+            store = CountingStore(Path(tmp) / "dashboard.sqlite3")
             store.save_portfolio(Portfolio(Decimal("990000"), {"588170.SH": Position("588170.SH", 10000, 10000, Decimal("1.00"), Decimal("1.10"))}))
             store.record_portfolio_snapshot(date(2026, 8, 17), store.load_portfolio(config.paper_account.initial_cash))
             store.record_backtest_run("momentum_grid", {"lookback_days": 5}, {"total_return": "0.05"}, "待人工确认")
@@ -101,7 +166,31 @@ class WebDashboardTests(unittest.TestCase):
         series = {item["series"] for item in payload["benchmark_comparison"]}
         self.assertIn("AI-Agent", series)
         self.assertEqual(payload["backtest_runs"][0]["status"], "待人工确认")
+        self.assertEqual(store.snapshot_loads, 1)
         json.dumps(payload, ensure_ascii=False)
+
+    def test_dashboard_section_payloads_have_independent_boundaries(self):
+        config = load_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "dashboard.sqlite3")
+            store.record_portfolio_snapshot(date(2026, 8, 17), Portfolio(Decimal("1000000")))
+            store.record_backtest_run("momentum_grid", {"lookback_days": 5}, {"total_return": "0.05"}, "待人工确认")
+
+            overview = build_dashboard_overview_payload(config, store, as_of=date(2026, 8, 17))
+            performance = build_dashboard_performance_payload(config, store, as_of=date(2026, 8, 17))
+            calendar = build_dashboard_calendar_payload(config, store, as_of=date(2026, 8, 17))
+            backtests = build_dashboard_backtests_payload(store)
+
+        self.assertIn("portfolio", overview)
+        self.assertIn("watchlist", overview)
+        self.assertIn("pending_backtest_count", overview)
+        self.assertIn("daily_return", overview)
+        self.assertNotIn("period_returns", overview)
+        self.assertNotIn("benchmark_comparison", overview)
+        self.assertIn("benchmark_comparison", performance)
+        self.assertNotIn("portfolio", performance)
+        self.assertEqual(set(calendar), {"profit_calendar"})
+        self.assertEqual(set(backtests), {"backtest_runs"})
 
     def test_dashboard_performance_interval_is_normalized_from_selected_start(self):
         config = load_config()
@@ -134,6 +223,12 @@ class WebDashboardTests(unittest.TestCase):
 
         self.assertIn("StockAI · 策略执行台", html)
         self.assertIn("/api/dashboard", html)
+        self.assertIn("/api/dashboard/overview", html)
+        self.assertIn("/api/dashboard/performance", html)
+        self.assertIn("/api/dashboard/calendar", html)
+        self.assertIn("/api/dashboard/backtests", html)
+        self.assertNotIn("fetch('/api/dashboard' + performanceQuery())", html)
+        self.assertIn("loadBacktests", html)
         self.assertIn("盈亏排行榜", html)
         self.assertIn("盈亏分析", html)
         self.assertIn("calendarGrid", html)
@@ -155,6 +250,9 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("看收益额", html)
         self.assertIn("ant-picker", html)
         self.assertIn("popupClassName", html)
+        self.assertNotIn('<script src="https://unpkg.com/', html)
+        self.assertIn("loadOptionalUiLibraries", html)
+        self.assertLess(html.rfind("const initialDashboardLoad = load()"), html.rfind("loadOptionalUiLibraries"))
         self.assertIn('data-mode="monthly"', html)
         self.assertIn('data-mode="yearly"', html)
         self.assertIn("clamp(16px,3vw,48px)", html)

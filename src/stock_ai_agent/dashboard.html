@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>StockAI · 策略执行台</title>
-  <link rel="stylesheet" href="https://unpkg.com/antd@5.29.3/dist/reset.css">
   <style>
     :root {
       color-scheme: light;
@@ -353,12 +352,6 @@
     </aside>
   </div>
   <div class="sr-only" id="liveStatus" aria-live="polite" aria-atomic="true"></div>
-  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/dayjs@1.11.22/dayjs.min.js"></script>
-  <script src="https://unpkg.com/dayjs@1.11.22/locale/zh-cn.js"></script>
-  <script src="https://unpkg.com/antd@5.29.3/dist/antd.min.js"></script>
-  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
   <script>
     const fmtMoney = value => Number(value || 0).toLocaleString('zh-CN', {minimumFractionDigits:2, maximumFractionDigits:2});
     const fmtPct = value => (Number(value || 0) * 100).toFixed(2) + '%';
@@ -367,11 +360,87 @@
     const seriesStyle = [{color:'#1769e0',dash:[],label:'AI-Agent'}, {color:'#a9640f',dash:[7,4]}, {color:'#7b61a8',dash:[3,3]}, {color:'#187a65',dash:[10,4]}, {color:'#536b91',dash:[2,4]}, {color:'#b5474d',dash:[8,3,2,3]}];
     let latestData = null, rankRows = [], sortKey = 'profit_amount', sortAsc = false, chartMode = 'return', performanceRangeMode = 'yearly', performanceStart = null, performanceEnd = null, performancePickerRoot = null, calendarMode = 'monthly', calendarValueMode = 'amount', calendarPeriod = null, calendarPickerRoot = null, selectedInstrument = null, instrumentSearchTimer = null;
     let visibleSeries = new Set(), knownSeries = new Set(), chartState = null, chartFocusIndex = -1, loading = false, chartObserver = null;
+    let overviewPromise = null, performanceRequestId = 0, backtestsLoaded = false;
+    let uiLibrariesPromise = null;
+
+    function loadExternalScript(src) {
+      const existing = document.querySelector('script[data-stockai-src="' + src + '"]');
+      if (existing) return existing.dataset.loaded === 'true' ? Promise.resolve() : new Promise((resolve, reject) => { existing.addEventListener('load', resolve, {once:true}); existing.addEventListener('error', reject, {once:true}); });
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.dataset.stockaiSrc = src;
+        script.addEventListener('load', () => { script.dataset.loaded = 'true'; resolve(); }, {once:true});
+        script.addEventListener('error', reject, {once:true});
+        document.head.appendChild(script);
+      });
+    }
+    function loadOptionalUiLibraries() {
+      if (uiLibrariesPromise) return uiLibrariesPromise;
+      const reactReady = loadExternalScript('https://unpkg.com/react@18.3.1/umd/react.production.min.js')
+        .then(() => loadExternalScript('https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js'));
+      const dayjsReady = loadExternalScript('https://unpkg.com/dayjs@1.11.22/dayjs.min.js')
+        .then(() => loadExternalScript('https://unpkg.com/dayjs@1.11.22/locale/zh-cn.js'));
+      const iconsReady = loadExternalScript('https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js');
+      const controlsReady = Promise.all([reactReady, dayjsReady])
+        .then(() => loadExternalScript('https://unpkg.com/antd@5.29.3/dist/antd.min.js'));
+      uiLibrariesPromise = Promise.allSettled([iconsReady, controlsReady]).then(() => {
+        iconify();
+        if (latestData) {
+          mountPerformanceRangePicker();
+          mountCalendarPeriodPicker(calendarOptions(latestData));
+        }
+      });
+      return uiLibrariesPromise;
+    }
 
     function iconify() { if (window.lucide) window.lucide.createIcons({attrs:{'aria-hidden':'true'}}); }
     function announce(text) { document.getElementById('liveStatus').textContent = text; }
     function setNotice(message = '') { const notice = document.getElementById('loadNotice'); notice.classList.toggle('visible', Boolean(message)); document.getElementById('loadNoticeText').textContent = message; }
     async function refreshDashboard() { await load(true); }
+    async function fetchDashboardSection(path) {
+      const response = await fetch(path);
+      if (!response.ok) throw new Error('服务返回 ' + response.status);
+      return response.json();
+    }
+    function mergeDashboardData(payload) {
+      latestData = {...(latestData || {}), ...payload};
+      return latestData;
+    }
+    function renderOverview(data) {
+      renderAccount(data);
+      renderDecisionTimeline(data);
+      renderPositions(data);
+      renderLeaderboard(data);
+      renderActivity(data);
+      iconify();
+    }
+    async function loadOverview() {
+      if (overviewPromise) return overviewPromise;
+      overviewPromise = fetchDashboardSection('/api/dashboard/overview')
+        .then(payload => { const data=mergeDashboardData(payload); renderOverview(data); return data; })
+        .finally(() => { overviewPromise=null; });
+      return overviewPromise;
+    }
+    async function loadPerformance() {
+      const requestId=++performanceRequestId;
+      const payload=await fetchDashboardSection('/api/dashboard/performance'+performanceQuery());
+      if (requestId !== performanceRequestId) return;
+      renderPerformance(mergeDashboardData(payload));
+    }
+    async function loadCalendar() {
+      const payload=await fetchDashboardSection('/api/dashboard/calendar');
+      renderCalendar(mergeDashboardData(payload));
+    }
+    async function loadBacktests() {
+      const payload=await fetchDashboardSection('/api/dashboard/backtests');
+      backtestsLoaded=true;
+      const data=mergeDashboardData(payload);
+      data.pending_backtest_count=(data.backtest_runs || []).filter(item=>item.status!=='已确认').length;
+      renderBacktests(data);
+      renderAccount(data);
+    }
     async function load(manual = false) {
       if (loading) return;
       loading = true;
@@ -379,12 +448,12 @@
       buttons.forEach(button => button.disabled = true);
       if (manual) announce('正在刷新交易数据。');
       try {
-        const response = await fetch('/api/dashboard' + performanceQuery());
-        if (!response.ok) throw new Error('服务返回 ' + response.status);
-        latestData = await response.json();
-        renderDashboard(latestData);
+        await loadOverview();
         setNotice('');
         announce(manual ? '交易数据已刷新。' : '交易看板已更新。');
+        const sections=[loadPerformance(),loadCalendar()];
+        if (backtestsLoaded) sections.push(loadBacktests());
+        await Promise.allSettled(sections);
       } catch (error) {
         setNotice('无法读取交易数据，请检查本地服务后重试。');
         announce('交易数据读取失败。');
@@ -394,15 +463,11 @@
       }
     }
     function renderDashboard(data) {
-      renderAccount(data);
-      renderPerformance(data);
-      renderDecisionTimeline(data);
-      renderPositions(data);
-      renderCalendar(data);
-      renderLeaderboard(data);
-      renderActivity(data);
-      renderBacktests(data);
-      iconify();
+      const merged=mergeDashboardData(data);
+      renderOverview(merged);
+      if (merged.benchmark_comparison) renderPerformance(merged);
+      if (merged.profit_calendar) renderCalendar(merged);
+      if (merged.backtest_runs) renderBacktests(merged);
     }
     function bindTabs() {
       document.querySelectorAll('#appTabs .view-tab').forEach(button => button.addEventListener('click', () => {
@@ -414,6 +479,7 @@
         });
         document.querySelectorAll('.view').forEach(view => view.classList.toggle('hidden', view.id !== target));
         document.getElementById(target).focus({preventScroll:true});
+        if (target === 'backtestView' && !backtestsLoaded) loadBacktests().catch(() => announce('回测记录读取失败，请稍后重试。'));
       }));
       document.querySelectorAll('#chartTabs button').forEach(button => button.addEventListener('click', () => {
         chartMode = button.dataset.mode;
@@ -429,7 +495,7 @@
         }
         document.querySelectorAll('#performanceRangeTabs button').forEach(item => item.classList.toggle('active', item === button));
         mountPerformanceRangePicker();
-        refreshDashboard();
+        loadPerformance().catch(() => announce('盈亏分析读取失败，请稍后重试。'));
       }));
       document.querySelectorAll('#calendarTabs button').forEach(button => button.addEventListener('click', () => {
         calendarMode = button.dataset.mode;
@@ -453,7 +519,7 @@
       if (!window.React || !window.ReactDOM || !window.dayjs || !window.antd?.DatePicker) { target.innerHTML='<span class="performance-range-label">'+escapeHtml(label)+'</span>'; return; }
       const {DatePicker,ConfigProvider}=window.antd, locale=window.antd.locale?.zh_CN || window.antd.locales?.zh_CN || window.antd.zh_CN;
       if (!performancePickerRoot) performancePickerRoot=ReactDOM.createRoot(target);
-      const onChange=values=>{ if (!values || !values[0] || !values[1]) return; performanceStart=values[0].format('YYYY-MM-DD'); performanceEnd=values[1].format('YYYY-MM-DD'); performanceRangeMode='custom'; document.querySelectorAll('#performanceRangeTabs button').forEach(item=>item.classList.toggle('active',item.dataset.mode==='custom')); mountPerformanceRangePicker(); refreshDashboard(); };
+      const onChange=values=>{ if (!values || !values[0] || !values[1]) return; performanceStart=values[0].format('YYYY-MM-DD'); performanceEnd=values[1].format('YYYY-MM-DD'); performanceRangeMode='custom'; document.querySelectorAll('#performanceRangeTabs button').forEach(item=>item.classList.toggle('active',item.dataset.mode==='custom')); mountPerformanceRangePicker(); loadPerformance().catch(()=>announce('盈亏分析读取失败，请稍后重试。')); };
       const node=React.createElement(DatePicker.RangePicker,{value:[dayjs(range.start),dayjs(range.end)],allowClear:false,inputReadOnly:true,format:'YYYY-MM-DD',locale:zhDatePickerLocale(),popupClassName:'calendar-period-popup',getPopupContainer:()=>target,onChange});
       performancePickerRoot.render(ConfigProvider&&locale?React.createElement(ConfigProvider,{locale},node):node);
     }
@@ -461,8 +527,8 @@
       const portfolio = data.portfolio || {};
       const asset = Number(portfolio.total_asset || 0);
       const market = Number(portfolio.total_market_value || 0);
-      const daily = (data.period_returns?.daily || []).at(-1)?.return_rate || 0;
-      const pending = (data.backtest_runs || []).filter(item => item.status !== '已确认').length;
+      const daily = data.daily_return ?? (data.period_returns?.daily || []).at(-1)?.return_rate ?? 0;
+      const pending = Number(data.pending_backtest_count ?? (data.backtest_runs || []).filter(item => item.status !== '已确认').length);
       document.getElementById('totalAsset').textContent = fmtMoney(asset);
       document.getElementById('cashLine').textContent = '现金 ' + fmtMoney(portfolio.cash) + ' 元';
       document.getElementById('exposureLine').textContent = '仓位 ' + fmtPct(asset ? market / asset : 0);
@@ -601,10 +667,10 @@
     function closeInstrumentDrawer(event) { if (event && event.target !== document.getElementById('instrumentDrawerBackdrop')) return; const drawer=document.getElementById('instrumentDrawerBackdrop'); drawer.classList.remove('open'); drawer.setAttribute('aria-hidden','true'); document.body.classList.remove('drawer-open'); }
     function queueInstrumentSearch(query) { selectedInstrument=null; document.getElementById('addInstrumentButton').disabled=true; document.getElementById('instrumentSelection').hidden=true; window.clearTimeout(instrumentSearchTimer); const text=query.trim(); if (text.length < 2) { document.getElementById('instrumentSearchResults').innerHTML='<p class="drawer-empty">请输入至少两个字符。</p>'; return; } instrumentSearchTimer=window.setTimeout(()=>searchInstruments(text),240); }
     async function searchInstruments(query) { const results=document.getElementById('instrumentSearchResults'); results.innerHTML='<p class="drawer-empty">正在检索标的...</p>'; try { const response=await fetch('/api/watchlist/search?q='+encodeURIComponent(query)); const payload=await response.json(); if (!response.ok) throw new Error('搜索失败'); renderInstrumentResults(payload.items || [],payload.catalog); } catch(error) { results.innerHTML='<p class="drawer-empty">未能检索标的，请稍后重试。</p>'; announce('标的搜索失败。'); } }
-    async function removeWatchlistItem(symbol) { if (!window.confirm('确认将 '+symbol+' 移出观察池吗？')) return; try { const response=await fetch('/api/watchlist/'+encodeURIComponent(symbol),{method:'DELETE'}); const payload=await response.json(); if(!response.ok)throw new Error(payload.message||'移除失败'); latestData=payload.dashboard; renderDashboard(latestData); announce(symbol+' 已移出观察池。'); } catch(error) { announce(error.message || '移除失败：持仓中的标的不能移除。'); } }
+    async function removeWatchlistItem(symbol) { if (!window.confirm('确认将 '+symbol+' 移出观察池吗？')) return; try { const response=await fetch('/api/watchlist/'+encodeURIComponent(symbol),{method:'DELETE'}); const payload=await response.json(); if(!response.ok)throw new Error(payload.message||'移除失败'); renderOverview(mergeDashboardData(payload.dashboard)); announce(symbol+' 已移出观察池。'); } catch(error) { announce(error.message || '移除失败：持仓中的标的不能移除。'); } }
     function renderInstrumentResults(items,catalog) { const results=document.getElementById('instrumentSearchResults'); if (!items.length) { const hasCatalog=Number(catalog&&catalog.count||0)>0; results.innerHTML='<p class="drawer-empty">'+(hasCatalog?'未找到符合条件的沪深股票或 ETF。':'证券目录正在同步，请稍后再试。')+'</p>'; return; } results.innerHTML=items.map((item,index)=>'<button class="instrument-result" type="button" data-index="'+index+'"><span class="instrument-result-top"><span class="instrument-result-name">'+escapeHtml(item.name)+'</span><span class="instrument-type">'+(item.asset_type==='etf'?'ETF':'股票')+'</span></span><span class="instrument-result-code">'+escapeHtml(item.symbol)+'</span></button>').join(''); results.querySelectorAll('.instrument-result').forEach(button=>button.addEventListener('click',()=>selectInstrument(items[Number(button.dataset.index)],Number(button.dataset.index)))); }
     function selectInstrument(item, index) { selectedInstrument=item; document.querySelectorAll('.instrument-result').forEach(button=>button.classList.toggle('selected',button.dataset.index===String(index))); const selection=document.getElementById('instrumentSelection'); selection.hidden=false; selection.innerHTML='<span class="kicker">已选择</span><strong>'+escapeHtml(item.name)+' · '+escapeHtml(item.symbol)+'</strong>'; document.getElementById('addInstrumentButton').disabled=false; }
-    async function addSelectedInstrument() { if (!selectedInstrument) return; const button=document.getElementById('addInstrumentButton'); button.disabled=true; try { const response=await fetch('/api/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedInstrument)}); const payload=await response.json(); if (!response.ok) throw new Error('添加失败'); latestData=payload.dashboard; renderDashboard(latestData); closeInstrumentDrawer(); announce(selectedInstrument.name+' 已加入观察池。'); } catch(error) { announce('添加标的失败，请检查代码和市场范围。'); button.disabled=false; } }
+    async function addSelectedInstrument() { if (!selectedInstrument) return; const button=document.getElementById('addInstrumentButton'); button.disabled=true; try { const response=await fetch('/api/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selectedInstrument)}); const payload=await response.json(); if (!response.ok) throw new Error('添加失败'); renderOverview(mergeDashboardData(payload.dashboard)); closeInstrumentDrawer(); announce(selectedInstrument.name+' 已加入观察池。'); } catch(error) { announce('添加标的失败，请检查代码和市场范围。'); button.disabled=false; } }
     function renderLeaderboard(data) {
       rankRows=data.profit_leaderboard || [];
       const controls=[['profit_amount','按盈亏金额'],['return_rate','按收益率'],['holding_days','按持仓天数']];
@@ -645,7 +711,7 @@
     }
     function toggleCalendarValue() { calendarValueMode=calendarValueMode==='amount'?'rate':'amount'; if (latestData) renderCalendar(latestData); }
     function calendarOptions(data) {
-      const curve=data.equity_curve || [], first=curve[0]?.day || '2026-01-01', last=curve.at(-1)?.day || first, startYear=Number(first.slice(0,4)), endYear=Number(last.slice(0,4));
+      const rows=data.profit_calendar?.daily || [], first=rows[0]?.period || '2026-01-01', last=rows.at(-1)?.period || first, startYear=Number(first.slice(0,4)), endYear=Number(last.slice(0,4));
       if (calendarMode==='yearly') return Array.from({length:endYear-startYear+1},(_,index)=>String(startYear+index));
       const [startY,startM]=first.slice(0,7).split('-').map(Number),[endY,endM]=last.slice(0,7).split('-').map(Number), result=[];
       for (let year=startY;year<=endY;year++) for(let month=year===startY?startM:1;month<=(year===endY?endM:12);month++) result.push(year+'-'+String(month).padStart(2,'0'));
@@ -677,10 +743,14 @@
     async function confirmBacktests(ids) {
       if(!ids.length) { announce('请先选择需要确认的回测记录。'); return; }
       const button=document.getElementById('confirmSelectedBtn'); button.disabled=true;
-      try { const response=await fetch('/api/backtests/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})}); if(!response.ok)throw new Error('确认失败'); const payload=await response.json(); latestData.backtest_runs=payload.backtest_runs || latestData.backtest_runs; renderBacktests(latestData); renderAccount(latestData); announce('已确认 '+(payload.updated || ids.length)+' 条回测记录。'); } catch(error) { announce('回测确认失败，请重试。'); } finally { button.disabled=false; iconify(); }
+      try { const response=await fetch('/api/backtests/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})}); if(!response.ok)throw new Error('确认失败'); const payload=await response.json(); latestData.backtest_runs=payload.backtest_runs || latestData.backtest_runs; latestData.pending_backtest_count=(latestData.backtest_runs || []).filter(item=>item.status!=='已确认').length; renderBacktests(latestData); renderAccount(latestData); announce('已确认 '+(payload.updated || ids.length)+' 条回测记录。'); } catch(error) { announce('回测确认失败，请重试。'); } finally { button.disabled=false; iconify(); }
     }
     document.addEventListener('keydown',event=>{ if(event.key==='Escape') closeInstrumentDrawer(); });
-    bindTabs(); iconify(); load(); window.setInterval(() => load(false),30000);
+    bindTabs();
+    iconify();
+    const initialDashboardLoad = load();
+    initialDashboardLoad.finally(loadOptionalUiLibraries);
+    window.setInterval(() => loadOverview().catch(() => setNotice('无法读取交易数据，请检查本地服务后重试。')),30000);
   </script>
 </body>
 </html>

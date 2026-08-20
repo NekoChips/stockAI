@@ -10,6 +10,8 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("image: ghcr.io/nekochips/stockai:latest", compose)
         self.assertIn("pull_policy: always", compose)
         self.assertIn("healthcheck:", compose)
+        self.assertIn("http://127.0.0.1:8765/healthz", compose)
+        self.assertNotIn("http://127.0.0.1:8765/api/dashboard', timeout=5", compose)
         self.assertNotIn("build:", compose)
 
     def test_github_workflow_publishes_latest_and_version_tags(self):

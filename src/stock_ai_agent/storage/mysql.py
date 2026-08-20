@@ -4,6 +4,7 @@ import json
 from contextlib import contextmanager
 from datetime import date, datetime
 from decimal import Decimal
+from threading import Lock
 from typing import Iterator, List
 
 from ..config import MySQLConnectionConfig
@@ -25,8 +26,19 @@ class MySQLMarketDataStore:
         self.database = connection.database
         self.username = connection.username
         self.password = connection.password
+        self._initialized = False
+        self._initialize_lock = Lock()
 
     def initialize(self) -> None:
+        if self._initialized:
+            return
+        with self._initialize_lock:
+            if self._initialized:
+                return
+            self._initialize_schema()
+            self._initialized = True
+
+    def _initialize_schema(self) -> None:
         statements = [
             """CREATE TABLE IF NOT EXISTS bars (
                 symbol VARCHAR(32) NOT NULL, interval_name VARCHAR(16) NOT NULL, timestamp_value VARCHAR(40) NOT NULL,

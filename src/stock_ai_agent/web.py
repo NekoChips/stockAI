@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from threading import Thread
 from dataclasses import asdict, is_dataclass
@@ -21,7 +22,7 @@ from .analytics import (
 from .config import AppConfig
 from .reference_data import sync_benchmark_history, sync_instrument_catalog
 from .universe import infer_asset_type, validate_hs_symbol
-from .watchlist import add_watchlist_item, effective_watchlist, remove_watchlist_item, watchlist_payload
+from .watchlist import add_watchlist_item, effective_watchlist, remove_watchlist_item
 
 
 ANALYSIS_START_DATE = date(2026, 1, 1)
@@ -35,28 +36,97 @@ def build_dashboard_payload(
     performance_end: date | None = None,
 ) -> dict[str, Any]:
     as_of = as_of or date.today()
+    stored_snapshots = store.load_portfolio_snapshots()
+    payload = {
+        **build_dashboard_overview_payload(config, store, as_of, stored_snapshots),
+        **build_dashboard_performance_payload(
+            config,
+            store,
+            as_of,
+            performance_start,
+            performance_end,
+            stored_snapshots,
+        ),
+        **build_dashboard_calendar_payload(config, store, as_of, stored_snapshots),
+        **build_dashboard_backtests_payload(store),
+    }
+    payload["period_returns"] = _to_jsonable(
+        compute_period_returns(
+            fill_daily_snapshots(
+                stored_snapshots,
+                ANALYSIS_START_DATE,
+                as_of,
+                config.paper_account.initial_cash,
+            )
+        )
+    )
+    return payload
+
+
+def build_dashboard_overview_payload(
+    config: AppConfig,
+    store,
+    as_of: date | None = None,
+    stored_snapshots=None,
+) -> dict[str, Any]:
+    as_of = as_of or date.today()
     portfolio = store.load_portfolio(config.paper_account.initial_cash)
     snapshots = fill_daily_snapshots(
-        store.load_portfolio_snapshots(),
+        stored_snapshots if stored_snapshots is not None else store.load_portfolio_snapshots(),
         ANALYSIS_START_DATE,
         as_of,
         config.paper_account.initial_cash,
     )
+    watchlist = effective_watchlist(config, store)
+    configured = {item.symbol for item in config.universe}
+    watchlist_rows = [
+        {**asdict(item), "source": "默认配置" if item.symbol in configured else "手动添加"}
+        for item in watchlist
+    ]
+    names = {item.symbol: item.name for item in watchlist}
+    all_fills = store.load_all_fills() if hasattr(store, "load_all_fills") else []
+    backtest_runs = store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else []
+    period_returns = compute_period_returns(snapshots)
+    daily_returns = period_returns.get("daily", [])
+    return _to_jsonable(
+        {
+            "portfolio": {
+                "cash": portfolio.cash,
+                "total_asset": portfolio.total_asset(),
+                "total_market_value": portfolio.total_market_value(),
+                "positions": list(portfolio.positions.values()),
+            },
+            "recent_fills": all_fills[-20:],
+            "today_decisions": store.load_decisions(as_of) if hasattr(store, "load_decisions") else [],
+            "daily_return": daily_returns[-1].return_rate if daily_returns else 0,
+            "profit_leaderboard": build_profit_leaderboard(portfolio, all_fills, names, as_of=as_of),
+            "watchlist": watchlist_rows,
+            "pending_backtest_count": sum(item.get("status") != "已确认" for item in backtest_runs),
+        }
+    )
+
+
+def build_dashboard_performance_payload(
+    config: AppConfig,
+    store,
+    as_of: date | None = None,
+    performance_start: date | None = None,
+    performance_end: date | None = None,
+    stored_snapshots=None,
+) -> dict[str, Any]:
+    as_of = as_of or date.today()
     selected_start, selected_end = _performance_range(performance_start, performance_end, as_of)
     performance_snapshots = fill_daily_snapshots(
-        store.load_portfolio_snapshots(),
+        stored_snapshots if stored_snapshots is not None else store.load_portfolio_snapshots(),
         selected_start,
         selected_end,
         config.paper_account.initial_cash,
     )
-    watchlist = effective_watchlist(config, store)
-    names = {item.symbol: item.name for item in watchlist}
     benchmark_names = {item.symbol: item.name for item in config.benchmarks}
     benchmark_bars = {
         item.symbol: store.load_bars(item.symbol, interval="daily")
         for item in config.benchmarks
     }
-    all_fills = store.load_all_fills() if hasattr(store, "load_all_fills") else []
     benchmark_comparison = build_benchmark_comparison(
         performance_snapshots,
         benchmark_bars,
@@ -80,27 +150,35 @@ def build_dashboard_payload(
     ]
     return _to_jsonable(
         {
-            "portfolio": {
-                "cash": portfolio.cash,
-                "total_asset": portfolio.total_asset(),
-                "total_market_value": portfolio.total_market_value(),
-                "positions": list(portfolio.positions.values()),
-            },
-            "recent_fills": all_fills[-20:],
-            "today_decisions": store.load_decisions(as_of) if hasattr(store, "load_decisions") else [],
             "equity_curve": [{"day": day, "total_asset": value} for day, value in performance_snapshots],
-            "period_returns": compute_period_returns(snapshots),
             "benchmark_comparison": benchmark_comparison,
             "benchmark_outperformance": benchmark_outperformance,
             "performance_range": {"start_date": selected_start, "end_date": selected_end},
             "benchmark_status": benchmark_status,
-            "profit_leaderboard": build_profit_leaderboard(portfolio, all_fills, names, as_of=as_of),
-            "profit_calendar": build_profit_calendar(snapshots),
-            "backtest_runs": store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else [],
             "benchmarks": benchmark_names,
-            "watchlist": watchlist_payload(config, store),
         }
     )
+
+
+def build_dashboard_calendar_payload(
+    config: AppConfig,
+    store,
+    as_of: date | None = None,
+    stored_snapshots=None,
+) -> dict[str, Any]:
+    as_of = as_of or date.today()
+    snapshots = fill_daily_snapshots(
+        stored_snapshots if stored_snapshots is not None else store.load_portfolio_snapshots(),
+        ANALYSIS_START_DATE,
+        as_of,
+        config.paper_account.initial_cash,
+    )
+    return _to_jsonable({"profit_calendar": build_profit_calendar(snapshots)})
+
+
+def build_dashboard_backtests_payload(store) -> dict[str, Any]:
+    runs = store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else []
+    return _to_jsonable({"backtest_runs": runs})
 
 
 def _performance_range(
@@ -182,12 +260,13 @@ def add_dashboard_watchlist_item(config: AppConfig, store, payload: dict[str, An
         str(payload.get("name") or ""),
         str(payload.get("asset_type") or "") or None,
     )
-    return _to_jsonable({"item": item, "dashboard": build_dashboard_payload(config, store)})
+    return _to_jsonable({"item": item, "dashboard": build_dashboard_overview_payload(config, store)})
 
 
 def remove_dashboard_watchlist_item(config: AppConfig, store, symbol: str) -> dict[str, Any]:
     removed = remove_watchlist_item(config, store, symbol)
-    return _to_jsonable({"removed": removed, "watchlist": watchlist_payload(config, store), "dashboard": build_dashboard_payload(config, store)})
+    overview = build_dashboard_overview_payload(config, store)
+    return _to_jsonable({"removed": removed, "watchlist": overview["watchlist"], "dashboard": overview})
 
 
 def _sync_dashboard_reference_data(config: AppConfig, store) -> None:
@@ -208,6 +287,35 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
             request = urlparse(self.path)
             if request.path == "/":
                 _send(self, "text/html; charset=utf-8", render_dashboard_html().encode("utf-8"))
+                return
+            if request.path == "/healthz":
+                _send(self, "application/json; charset=utf-8", b'{"status":"ok"}')
+                return
+            if request.path == "/api/dashboard/overview":
+                payload = build_dashboard_overview_payload(config, store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard/performance":
+                try:
+                    query = parse_qs(request.query)
+                    payload = build_dashboard_performance_payload(
+                        config,
+                        store,
+                        performance_start=_query_date(query, "performance_start"),
+                        performance_end=_query_date(query, "performance_end"),
+                    )
+                except ValueError as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard/calendar":
+                payload = build_dashboard_calendar_payload(config, store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard/backtests":
+                payload = build_dashboard_backtests_payload(store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             if request.path == "/api/dashboard":
                 try:
@@ -821,11 +929,28 @@ def _render_dashboard_html_legacy() -> str:
 """
 
 def _send(handler: BaseHTTPRequestHandler, content_type: str, body: bytes, status: int = 200) -> None:
-    handler.send_response(status)
-    handler.send_header("Content-Type", content_type)
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
+    try:
+        headers = getattr(handler, "headers", {})
+        accept_encoding = headers.get("Accept-Encoding", "") if hasattr(headers, "get") else ""
+        if len(body) >= 1024 and "gzip" in accept_encoding.lower():
+            body = gzip.compress(body, compresslevel=5)
+            handler.send_response(status)
+            handler.send_header("Content-Type", content_type)
+            handler.send_header("Content-Encoding", "gzip")
+            handler.send_header("Vary", "Accept-Encoding")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.end_headers()
+            handler.wfile.write(body)
+            return
+        handler.send_response(status)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+        # Browsers, health checks, and reverse proxies may cancel a request
+        # after receiving enough data; the server has no work left to do.
+        return
 
 
 def _send_error(handler: BaseHTTPRequestHandler, status: int, message: str) -> None:
