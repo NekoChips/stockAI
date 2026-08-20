@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from stock_ai_agent.analytics import (
     build_benchmark_comparison,
+    build_benchmark_outperformance,
     build_profit_calendar,
     build_profit_leaderboard,
     compute_period_returns,
@@ -66,6 +67,20 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(result[0].series, "AI-Agent")
         self.assertEqual(result[-1].series, "上证指数")
         self.assertEqual(result[-1].return_rate, Decimal("0.010000"))
+
+    def test_benchmark_outperformance_uses_latest_common_date(self):
+        points = build_benchmark_comparison(
+            [(date(2026, 8, 1), Decimal("100")), (date(2026, 8, 2), Decimal("108"))],
+            {"000001.SH": [bar("000001.SH", date(2026, 8, 1), "3000"), bar("000001.SH", date(2026, 8, 2), "3030")]},
+            {"000001.SH": "上证指数"},
+        )
+
+        rows = build_benchmark_outperformance(points, ["上证指数"])
+
+        self.assertEqual(rows[0].series, "上证指数")
+        self.assertEqual(rows[0].agent_return, Decimal("0.080000"))
+        self.assertEqual(rows[0].benchmark_return, Decimal("0.010000"))
+        self.assertEqual(rows[0].difference, Decimal("0.070000"))
 
     def test_profit_leaderboard_includes_amount_holding_days_and_rate(self):
         portfolio = Portfolio(

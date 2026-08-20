@@ -1,0 +1,14 @@
+.git
+.agents
+.codex
+.learnings
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+data
+reports
+dist
+config/*.local.yaml
+config/*.secret.yaml
+docker/.env.release

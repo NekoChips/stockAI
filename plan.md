@@ -175,6 +175,22 @@
 - 内容：已实现功能、测试结果、已知限制、如何运行、后续建议。
 - 完成条件：所有测试通过，并生成至少一份中文 Markdown 日报。
 
+### 任务 24：证券目录、观察池维护与基准数据可靠性
+
+- 状态：已完成。
+- 在 SQLite 增加全量证券目录与观察池排除记录，目录按日以成功快照整体更新。
+- 添加本地目录搜索、观察池删除 API 和持仓保护；支持 AKShare 目录与指数 K 线备用源。
+- 删除指数数据缺失时的零线伪造，页面展示每个指数的同步状态。
+- 验证：真实同步 6,789 条证券目录和五个指数各 637 条 K 线；83 个单元测试通过。
+
+### 任务 25：收益分析区间与观察池交互修复
+
+- 状态：已完成。
+- 修复动态 HTML 中带引号的内联事件，观察池删除和图例显示/隐藏改为事件监听。
+- 支持当年、当月和自定义日期范围；服务端将每个所选区间起始日归一化为 0 收益率。
+- 新增 Agent 相对主要指数的跑赢/跑输结果和进度条展示；移除可视的“已展示”说明行。
+- 验证：86 个单元测试通过，浏览器实测图例切换、当月区间和自定义范围控件。
+
 ## 5. 人工检查点
 
 开始写代码前需要确认本计划。后续还有三个检查点：
@@ -209,3 +225,24 @@
 - 测试文件：`/Users/neko/Documents/ChatGPT/codex-stockAI/tests/test_web.py`
 - 实现文件：`/Users/neko/Documents/ChatGPT/codex-stockAI/src/stock_ai_agent/web.py`、`/Users/neko/Documents/ChatGPT/codex-stockAI/src/stock_ai_agent/app.py`
 - 验证：`web` 命令启动本地页面；`/api/dashboard` 返回账户、持仓、收益、指数对比、盈亏排行榜、盈亏日历和回测记录。
+
+### 任务 22：决策账本界面重构
+
+- 测试文件：`/Users/neko/Documents/ChatGPT/codex-stockAI/tests/test_web.py`
+- 实现文件：`/Users/neko/Documents/ChatGPT/codex-stockAI/src/stock_ai_agent/web.py`
+- 描述：重构交易看板的视觉层级和响应式布局，加入决策轨道、可交互的基准图例、键盘图表读取、刷新反馈以及无障碍语义。
+- 验证：HTML 结构测试覆盖关键交互锚点；全量单元测试通过；在 375px、768px、1440px 视口无横向溢出。
+
+### 任务 23：观察池添加与检索
+
+- 测试文件：`/Users/neko/Documents/ChatGPT/codex-stockAI/tests/test_web.py`、`/Users/neko/Documents/ChatGPT/codex-stockAI/tests/test_storage_sqlite.py`、`/Users/neko/Documents/ChatGPT/codex-stockAI/tests/test_akshare_adapter.py`
+- 实现文件：`/Users/neko/Documents/ChatGPT/codex-stockAI/src/stock_ai_agent/dashboard.html`、`/Users/neko/Documents/ChatGPT/codex-stockAI/src/stock_ai_agent/web.py`、`/Users/neko/Documents/ChatGPT/codex-stockAI/src/stock_ai_agent/watchlist.py`
+- 描述：在交易看板内通过抽屉添加沪深股票或 ETF；支持六码代码兜底、名称联想、SQLite 持久化、有效交易宇宙合并及 API 保存。
+- 验证：观察池保存/合并、AKShare 解析、代码规范化、全量单元测试与 HTTP 冒烟验证。
+
+### 任务 24：收益分析控件与比较结果布局
+
+- 测试文件：`/Users/neko/Documents/ChatGPT/codex-stockAI/tests/test_web.py`
+- 实现文件：`/Users/neko/Documents/ChatGPT/codex-stockAI/src/stock_ai_agent/dashboard.html`
+- 描述：固定收益区间、日期范围和指标选择器的位置；将大盘跑赢/跑输卡片移至收益图下方；统一 Ant Design 日期弹层的中文格式与正常字重。
+- 验证：页面结构断言、完整单元测试和浏览器坐标检查覆盖当月/自定义切换。

@@ -17,5 +17,12 @@ env/
 # Local runtime data
 data/*.sqlite3
 data/*.sqlite3-*
+data/backups/
 reports/
 .learnings/
+
+# Deployment-only configuration and credentials
+config/*.local.yaml
+config/*.secret.yaml
+docker/.env.release
+dist/

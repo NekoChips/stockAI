@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time as clock_time
 from decimal import Decimal
 from pathlib import Path
+from threading import Thread
 from typing import Callable, List, Optional, Protocol
 from zoneinfo import ZoneInfo
 
@@ -23,8 +24,10 @@ from .quant_strategies import (
     VolatilityTargetStrategy,
 )
 from .risk import RiskEngine
+from .reference_data import sync_benchmark_history, sync_instrument_catalog
 from .strategy import StrategyContext, TechnicalCompositeStrategy, aggregate_signals
 from .universe import Universe
+from .watchlist import effective_watchlist
 
 
 class PaperTradingStore(Protocol):
@@ -80,11 +83,14 @@ class RealTimePaperTradingMonitor:
         self.output_dir = output_dir
         self.timezone = ZoneInfo(config.timezone)
         self._reported_dates: set[date] = set()
+        self._reference_sync_attempted_dates: set[date] = set()
 
     def run_iteration(self, now: datetime | None = None, ignore_market_hours: bool = False) -> MonitorIterationResult:
         local_now = self._local_now(now)
         trade_date = local_now.date()
         portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
+
+        self._sync_daily_reference_data(trade_date)
 
         if self.config.monitor.settle_on_start:
             self.store.settle_t_plus_one(trade_date)
@@ -93,7 +99,7 @@ class RealTimePaperTradingMonitor:
         if self.config.monitor.respect_market_hours and not ignore_market_hours and not is_trading_time(local_now):
             return MonitorIterationResult("skipped", "当前不在 A 股连续竞价交易时段，跳过本轮盯盘。", portfolio, [], [])
 
-        universe = Universe.from_config(self.config.universe)
+        universe = Universe.from_config(effective_watchlist(self.config, self.store))
         risk = RiskEngine(self.config.risk, universe)
         broker = PaperBroker(portfolio, self.config.paper_account.fee_rate, self.config.paper_account.slippage_rate)
         interval = str(self.config.data.history.get("interval", "daily"))
@@ -195,6 +201,24 @@ class RealTimePaperTradingMonitor:
         if current.tzinfo is None:
             return current.replace(tzinfo=self.timezone)
         return current.astimezone(self.timezone)
+
+    def _sync_daily_reference_data(self, trade_date: date) -> None:
+        if trade_date in self._reference_sync_attempted_dates:
+            return
+        self._reference_sync_attempted_dates.add(trade_date)
+        Thread(target=self._sync_reference_data_in_background, args=(trade_date,), daemon=True).start()
+
+    def _sync_reference_data_in_background(self, trade_date: date) -> None:
+        """Reference data must not delay a market-hours trading iteration."""
+        if hasattr(self.quote_provider, "list_instruments"):
+            try:
+                sync_instrument_catalog(self.config, self.store, self.quote_provider, trade_date.isoformat())
+            except Exception:
+                pass
+        try:
+            sync_benchmark_history(self.config, self.store)
+        except Exception:
+            pass
 
 
 def is_trading_time(now: datetime) -> bool:

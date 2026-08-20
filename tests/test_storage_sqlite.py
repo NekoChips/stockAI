@@ -42,6 +42,39 @@ class SQLiteStorageTests(unittest.TestCase):
         self.assertEqual(len(loaded), 1)
         self.assertEqual(loaded[0].close_price, Decimal("1.050"))
 
+    def test_user_watchlist_items_are_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "watchlist.sqlite3")
+            store.add_watchlist_item("510300.SH", "沪深300ETF", "etf")
+            store.add_watchlist_item("600519.SH", "贵州茅台", "stock")
+            items = store.load_watchlist_items()
+
+        self.assertEqual([item["symbol"] for item in items], ["510300.SH", "600519.SH"])
+        self.assertEqual(items[0]["name"], "沪深300ETF")
+
+    def test_instrument_catalog_search_and_watchlist_removal_are_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "catalog.sqlite3")
+            store.replace_instrument_catalog(
+                [
+                    {"symbol": "600519.SH", "name": "贵州茅台", "asset_type": "stock"},
+                    {"symbol": "510300.SH", "name": "沪深300ETF", "asset_type": "etf"},
+                ],
+                "2026-08-19",
+                "akshare",
+            )
+            store.add_watchlist_item("510300.SH", "沪深300ETF", "etf")
+            store.remove_watchlist_item("510300.SH")
+            by_code = store.search_instrument_catalog("600519")
+            by_name = store.search_instrument_catalog("沪深")
+            remaining = store.load_watchlist_items()
+            removed = store.load_removed_watchlist_symbols()
+
+        self.assertEqual(by_code[0]["name"], "贵州茅台")
+        self.assertEqual(by_name[0]["symbol"], "510300.SH")
+        self.assertEqual(remaining, [])
+        self.assertIn("510300.SH", removed)
+
     def test_save_and_load_paper_portfolio(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "paper.sqlite3")

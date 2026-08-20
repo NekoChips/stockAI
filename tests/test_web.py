@@ -6,12 +6,81 @@ from decimal import Decimal
 from pathlib import Path
 
 from stock_ai_agent.config import load_config
-from stock_ai_agent.models import Portfolio, Position
+from stock_ai_agent.models import Bar, Portfolio, Position
 from stock_ai_agent.storage.sqlite import SQLiteMarketDataStore
-from stock_ai_agent.web import build_dashboard_payload, confirm_backtest_runs, render_dashboard_html
+from stock_ai_agent.web import (
+    add_dashboard_watchlist_item,
+    build_dashboard_payload,
+    confirm_backtest_runs,
+    remove_dashboard_watchlist_item,
+    render_dashboard_html,
+    search_watchlist_instruments,
+)
 
 
 class WebDashboardTests(unittest.TestCase):
+    def test_catalog_resolves_code_name_and_removal_updates_dashboard(self):
+        config = load_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "dashboard.sqlite3")
+            store.replace_instrument_catalog(
+                [{"symbol": "600519.SH", "name": "贵州茅台", "asset_type": "stock"}],
+                "2026-08-19",
+                "akshare",
+            )
+            results = search_watchlist_instruments(config, store, "600519")
+            added = add_dashboard_watchlist_item(
+                config,
+                store,
+                {"symbol": "600519.SH", "name": "", "asset_type": "stock"},
+            )
+            removed = remove_dashboard_watchlist_item(config, store, "600519.SH")
+
+        self.assertEqual(results, [{"symbol": "600519.SH", "name": "贵州茅台", "asset_type": "stock"}])
+        self.assertIn("600519.SH", {item["symbol"] for item in added["dashboard"]["watchlist"]})
+        self.assertNotIn("600519.SH", {item["symbol"] for item in removed["watchlist"]})
+
+    def test_removing_default_watchlist_item_hides_it_without_changing_config(self):
+        config = load_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "dashboard.sqlite3")
+            removed = remove_dashboard_watchlist_item(config, store, "588170.SH")
+
+        self.assertNotIn("588170.SH", {item["symbol"] for item in removed["watchlist"]})
+        self.assertIn("588170.SH", {item.symbol for item in config.universe})
+
+    def test_watchlist_search_and_addition_are_persisted_in_dashboard(self):
+        class SearchProvider:
+            def search_instruments(self, query, limit=12):
+                self.query = query
+                return [{"symbol": "510300.SH", "name": "沪深300ETF", "asset_type": "etf"}]
+
+        config = load_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "dashboard.sqlite3")
+            provider = SearchProvider()
+            results = search_watchlist_instruments(config, store, "沪深", provider)
+            added = add_dashboard_watchlist_item(
+                config,
+                store,
+                {"symbol": "510300.SH", "name": "沪深300ETF", "asset_type": "etf"},
+            )
+
+        self.assertEqual(provider.query, "沪深")
+        self.assertEqual(results[0]["symbol"], "510300.SH")
+        self.assertEqual(added["item"]["symbol"], "510300.SH")
+        self.assertIn("510300.SH", {item["symbol"] for item in added["dashboard"]["watchlist"]})
+        self.assertEqual(
+            search_watchlist_instruments(config, store, "600519"),
+            [{"symbol": "600519.SH", "name": "名称待目录同步", "asset_type": "stock"}],
+        )
+        with self.assertRaises(ValueError):
+            add_dashboard_watchlist_item(
+                config,
+                SQLiteMarketDataStore(Path(tmp) / "invalid.sqlite3"),
+                {"symbol": "600519.SH", "name": "贵州茅台", "asset_type": "etf"},
+            )
+
     def test_dashboard_payload_contains_core_sections(self):
         config = load_config()
         with tempfile.TemporaryDirectory() as tmp:
@@ -27,25 +96,50 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("profit_calendar", payload)
         self.assertEqual(payload["equity_curve"][0]["day"], "2026-01-01")
         self.assertEqual(payload["profit_calendar"]["daily"][0]["period"], "2026-01-01")
-        self.assertGreater(len(payload["benchmark_comparison"]), 100)
+        self.assertEqual({item["series"] for item in payload["benchmark_comparison"]}, {"AI-Agent"})
+        self.assertTrue(all(item["state"] == "待同步" for item in payload["benchmark_status"]))
         series = {item["series"] for item in payload["benchmark_comparison"]}
         self.assertIn("AI-Agent", series)
-        for benchmark in config.benchmarks:
-            self.assertIn(benchmark.name, series)
         self.assertEqual(payload["backtest_runs"][0]["status"], "待人工确认")
         json.dumps(payload, ensure_ascii=False)
+
+    def test_dashboard_performance_interval_is_normalized_from_selected_start(self):
+        config = load_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "dashboard.sqlite3")
+            store.record_portfolio_snapshot(date(2026, 8, 1), Portfolio(Decimal("100")))
+            store.record_portfolio_snapshot(date(2026, 8, 2), Portfolio(Decimal("108")))
+            store.save_bars(
+                [
+                    Bar("000001.SH", date(2026, 8, 1), Decimal("3000"), Decimal("3000"), Decimal("3000"), Decimal("3000"), Decimal("1")),
+                    Bar("000001.SH", date(2026, 8, 2), Decimal("3030"), Decimal("3030"), Decimal("3030"), Decimal("3030"), Decimal("1")),
+                ]
+            )
+            payload = build_dashboard_payload(
+                config,
+                store,
+                as_of=date(2026, 8, 2),
+                performance_start=date(2026, 8, 1),
+                performance_end=date(2026, 8, 2),
+            )
+
+        agent_points = [item for item in payload["benchmark_comparison"] if item["series"] == "AI-Agent"]
+        self.assertEqual(payload["performance_range"], {"start_date": "2026-08-01", "end_date": "2026-08-02"})
+        self.assertEqual(agent_points[0]["return_rate"], "0.000000")
+        self.assertEqual(agent_points[-1]["return_rate"], "0.080000")
+        self.assertEqual(payload["benchmark_outperformance"][0]["difference"], "0.070000")
 
     def test_dashboard_html_references_local_api(self):
         html = render_dashboard_html()
 
-        self.assertIn("AI-Agent 实时交易驾驶舱", html)
+        self.assertIn("StockAI · 策略执行台", html)
         self.assertIn("/api/dashboard", html)
         self.assertIn("盈亏排行榜", html)
         self.assertIn("盈亏分析", html)
         self.assertIn("calendarGrid", html)
         self.assertIn("交易看板", html)
         self.assertIn("回测记录", html)
-        self.assertIn("批量确认", html)
+        self.assertIn("确认所选", html)
         self.assertIn("calendarPeriodPicker", html)
         self.assertIn("antd@5.29.3", html)
         self.assertIn("react@18.3.1", html)
@@ -63,8 +157,8 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("popupClassName", html)
         self.assertIn('data-mode="monthly"', html)
         self.assertIn('data-mode="yearly"', html)
-        self.assertIn("clamp(10px, 2vw, 28px)", html)
-        self.assertIn("@media (min-width: 1280px)", html)
+        self.assertIn("clamp(16px,3vw,48px)", html)
+        self.assertIn("@media (max-width:1100px)", html)
         self.assertNotIn("收益率走势", html)
         self.assertNotIn('data-mode="daily"', html)
         self.assertNotIn("calendarValueTabs", html)
@@ -74,6 +168,50 @@ class WebDashboardTests(unittest.TestCase):
         self.assertNotIn("max-width: 920px", html)
         self.assertNotIn("周期收益率", html)
         self.assertNotIn("JSON.stringify(x.parameters)", html)
+        self.assertNotIn("ticker-track", html)
+        self.assertIn('class="skip-link"', html)
+        self.assertIn('aria-live="polite"', html)
+        self.assertIn("refreshDashboard", html)
+        self.assertIn("decisionTimeline", html)
+        self.assertIn("chartLegend", html)
+        self.assertIn("chartTooltip", html)
+        self.assertIn("toggleChartSeries", html)
+        self.assertIn("showChartPoint", html)
+        self.assertIn("ResizeObserver", html)
+        self.assertIn("lucide@", html)
+        self.assertIn("prefers-reduced-motion", html)
+        self.assertIn(".decision-panel { grid-column:2; display:flex", html)
+        self.assertIn("positions-scroll", html)
+        self.assertIn("行情订阅已就绪", html)
+        self.assertIn("align-items:stretch", html)
+        self.assertIn(".decision-panel { grid-column:2; display:flex", html)
+        self.assertIn(".positions-panel { grid-column:1; display:flex", html)
+        self.assertIn("#positions { display:flex; flex:1", html)
+        self.assertIn(".positions-footer { flex:none", html)
+        self.assertIn(".calendar-total > div { display:flex", html)
+        self.assertIn("添加标的", html)
+        self.assertIn("instrumentDrawer", html)
+        self.assertIn("/api/watchlist/search", html)
+        self.assertIn("addSelectedInstrument", html)
+        self.assertIn("removeWatchlistItem", html)
+        self.assertIn("benchmarkStatus", html)
+        self.assertIn("data-remove-symbol", html)
+        self.assertIn("performanceRangeTabs", html)
+        self.assertIn("benchmarkOutperformance", html)
+        self.assertIn('grid-template-columns:max-content 256px', html)
+        self.assertIn('grid-template-areas:"range picker" ". chart"', html)
+        self.assertIn('#performanceRangeTabs { grid-area:range; }', html)
+        self.assertIn('#chartTabs { grid-area:chart; justify-self:end; }', html)
+        self.assertIn('.performance-range-picker .ant-picker { width:100%;', html)
+        self.assertIn('@media (min-width:721px) and (max-width:1500px)', html)
+        self.assertIn("dayFormat:'D'", html)
+        self.assertNotIn("dayFormat:'D日'", html)
+        self.assertIn("const disabledDate=current=>{if(!current)return false;const key=calendarMode", html)
+        self.assertNotIn("optionSet=new Set(options)", html)
+        self.assertLess(html.index('class="chart-wrap"'), html.index('id="benchmarkOutperformance"'))
+        self.assertNotIn('onclick="removeWatchlistItem(', html)
+        self.assertNotIn('onclick="toggleChartSeries(', html)
+        self.assertNotIn('class="chart-summary"', html)
 
     def test_backtest_confirm_updates_selected_runs(self):
         config = load_config()
