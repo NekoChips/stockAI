@@ -107,6 +107,39 @@ class SQLiteMarketDataStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS watchlist_items (
+                    symbol TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    asset_type TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS watchlist_exclusions (
+                    symbol TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS instrument_catalog (
+                    symbol TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    asset_type TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    synced_date TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_instrument_catalog_name ON instrument_catalog(name)")
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
                     snapshot_date TEXT PRIMARY KEY,
                     cash TEXT NOT NULL,
@@ -201,6 +234,103 @@ class SQLiteMarketDataStore:
             )
             for row in rows
         ]
+
+    def load_watchlist_items(self) -> list[dict[str, str]]:
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT symbol, name, asset_type FROM watchlist_items ORDER BY created_at ASC, symbol ASC"
+            ).fetchall()
+        return [{"symbol": row[0], "name": row[1], "asset_type": row[2]} for row in rows]
+
+    def add_watchlist_item(self, symbol: str, name: str, asset_type: str) -> None:
+        self.initialize()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM watchlist_exclusions WHERE symbol = ?", (symbol,))
+            conn.execute(
+                """
+                INSERT INTO watchlist_items (symbol, name, asset_type)
+                VALUES (?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    name=excluded.name,
+                    asset_type=excluded.asset_type,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                (symbol, name, asset_type),
+            )
+
+    def remove_watchlist_item(self, symbol: str) -> None:
+        self.initialize()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM watchlist_items WHERE symbol = ?", (symbol,))
+            conn.execute(
+                "INSERT OR IGNORE INTO watchlist_exclusions (symbol) VALUES (?)",
+                (symbol,),
+            )
+
+    def restore_watchlist_item(self, symbol: str) -> None:
+        self.initialize()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM watchlist_exclusions WHERE symbol = ?", (symbol,))
+
+    def load_removed_watchlist_symbols(self) -> set[str]:
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute("SELECT symbol FROM watchlist_exclusions").fetchall()
+        return {str(row[0]) for row in rows}
+
+    def replace_instrument_catalog(self, items: list[dict[str, str]], synced_date: str, source: str) -> int:
+        if not items:
+            return 0
+        self.initialize()
+        rows = [
+            (str(item["symbol"]), str(item["name"]), str(item["asset_type"]), source, synced_date)
+            for item in items
+        ]
+        with self._connect() as conn:
+            conn.execute("DELETE FROM instrument_catalog")
+            conn.executemany(
+                """
+                INSERT INTO instrument_catalog (symbol, name, asset_type, source, synced_date)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            conn.execute(
+                """
+                INSERT INTO metadata (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+                """,
+                ("instrument_catalog_synced_date", synced_date),
+            )
+        return len(rows)
+
+    def search_instrument_catalog(self, query: str, limit: int = 12) -> list[dict[str, str]]:
+        self.initialize()
+        text = str(query).strip().upper()
+        if not text:
+            return []
+        pattern = f"%{text}%"
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT symbol, name, asset_type
+                FROM instrument_catalog
+                WHERE UPPER(symbol) LIKE ? OR UPPER(name) LIKE ?
+                ORDER BY CASE WHEN UPPER(symbol) = ? THEN 0 ELSE 1 END, name ASC
+                LIMIT ?
+                """,
+                (pattern, pattern, text, int(limit)),
+            ).fetchall()
+        return [{"symbol": row[0], "name": row[1], "asset_type": row[2]} for row in rows]
+
+    def instrument_catalog_status(self) -> dict[str, str | int]:
+        self.initialize()
+        with self._connect() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM instrument_catalog").fetchone()[0]
+            row = conn.execute("SELECT value FROM metadata WHERE key = ?", ("instrument_catalog_synced_date",)).fetchone()
+        return {"count": int(count), "synced_date": row[0] if row else ""}
 
     def load_portfolio(self, initial_cash: Decimal) -> Portfolio:
         self.initialize()

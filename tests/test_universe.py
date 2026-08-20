@@ -12,6 +12,10 @@ class UniverseTests(unittest.TestCase):
         self.assertEqual(validate_hs_symbol("000001.SZ", "stock"), "000001.SZ")
         self.assertEqual(normalize_symbol("588170"), "588170.SH")
 
+    def test_normalizes_provider_prefixed_exchange_codes(self):
+        self.assertEqual(validate_hs_symbol("sh600519"), "600519.SH")
+        self.assertEqual(validate_hs_symbol("sz000001"), "000001.SZ")
+
     def test_rejects_out_of_scope_symbols(self):
         for symbol in ["00700.HK", "AAPL.US", "588170", "900901.SH", "200002.SZ"]:
             if symbol == "588170":

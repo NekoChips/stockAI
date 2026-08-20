@@ -25,11 +25,15 @@ from .quant_strategies import (
     VolatilityTargetStrategy,
 )
 from .risk import RiskEngine
+from .reference_data import sync_benchmark_history, sync_instrument_catalog
 from .storage.base import MarketDataStore
+from .storage.backup import backup_sqlite_database, restore_sqlite_database
+from .storage.mysql import MySQLMarketDataStore
 from .storage.sqlite import SQLiteMarketDataStore
 from .strategy import StrategyContext, TechnicalCompositeStrategy, aggregate_signals
 from .universe import Universe
 from .web import serve_dashboard
+from .watchlist import effective_watchlist
 
 
 @dataclass
@@ -43,6 +47,8 @@ class RunResult:
 def create_market_data_store(config: AppConfig) -> MarketDataStore:
     if config.storage.driver == "sqlite":
         return SQLiteMarketDataStore(config.storage.database)
+    if config.storage.driver == "mysql":
+        return MySQLMarketDataStore(config.storage.mysql)
     raise ValueError(f"暂不支持的数据存储驱动：{config.storage.driver}")
 
 
@@ -114,6 +120,7 @@ def run_once_from_store(
     report_date: Optional[date] = None,
     history_limit: int = 80,
 ) -> RunResult:
+    config = replace(config, universe=effective_watchlist(config, store))
     universe = Universe.from_config(config.universe)
     bars_by_symbol = {
         instrument.symbol: store.load_bars(instrument.symbol, interval=str(config.data.history.get("interval", "daily")), limit=history_limit)
@@ -127,6 +134,7 @@ def run_once_from_store(
 
 
 def sync_history(config: AppConfig, store: MarketDataStore, adapter=None) -> dict[str, int]:
+    config = replace(config, universe=effective_watchlist(config, store))
     universe = Universe.from_config(config.universe)
     adapter = adapter or create_history_data_provider(config)
     history_config = config.data.history
@@ -142,17 +150,7 @@ def sync_history(config: AppConfig, store: MarketDataStore, adapter=None) -> dic
 
 
 def sync_benchmarks(config: AppConfig, store: MarketDataStore, adapter=None) -> dict[str, int]:
-    adapter = adapter or create_history_data_provider(config)
-    history_config = config.data.history
-    start = str(history_config.get("start", "20240101"))
-    end = str(history_config.get("end", "20500101"))
-    counts: dict[str, int] = {}
-    if not hasattr(adapter, "get_index_bars"):
-        raise ValueError("当前历史数据源暂不支持指数历史 K 线同步。")
-    for benchmark in config.benchmarks:
-        bars = adapter.get_index_bars(benchmark.symbol, benchmark.akshare_symbol, start=start, end=end)
-        counts[benchmark.symbol] = store.save_bars(bars, interval="daily", source=f"{config.data.history_provider}_benchmark")
-    return counts
+    return sync_benchmark_history(config, store, adapter)
 
 
 def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> object:
@@ -185,8 +183,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="A股沪深模拟盘 AI-Agent")
     parser.add_argument(
         "command",
-        choices=["sync-history", "sync-benchmarks", "run-once", "monitor", "post-close", "optimize-strategy", "web"],
-        help="同步历史 K 线、同步指数、运行模拟、实时盯盘、收盘日报、回测优化或启动 Web",
+        choices=["sync-history", "sync-benchmarks", "sync-instruments", "backup-data", "restore-data", "run-once", "monitor", "post-close", "optimize-strategy", "web"],
+        help="同步行情、备份或恢复数据、运行模拟、实时盯盘、收盘日报、回测优化或启动 Web",
     )
     parser.add_argument("--config", default="config/default.yaml", help="配置文件路径")
     parser.add_argument("--reports", default="reports", help="日报输出目录")
@@ -195,11 +193,32 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--ignore-market-hours", action="store_true", help="忽略 A 股交易时段限制，便于本地验证")
     parser.add_argument("--host", default="127.0.0.1", help="Web 服务监听地址")
     parser.add_argument("--port", type=int, default=8765, help="Web 服务监听端口")
+    parser.add_argument("--backup-dir", default=None, help="SQLite 备份目录，默认读取配置")
+    parser.add_argument("--backup-file", default=None, help="要恢复的 SQLite 备份文件路径")
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
     if args.poll_seconds is not None:
         config = replace(config, monitor=replace(config.monitor, poll_seconds=args.poll_seconds))
+    if args.command in {"backup-data", "restore-data"}:
+        if config.storage.driver != "sqlite":
+            print("数据备份与恢复命令当前仅支持 SQLite 开发环境。", file=sys.stderr)
+            return 1
+        backup_dir = args.backup_dir or config.storage.backup_dir
+        try:
+            if args.command == "backup-data":
+                backup = backup_sqlite_database(config.storage.database, backup_dir)
+                print(f"SQLite 数据备份完成：{backup.path}")
+            else:
+                if not args.backup_file:
+                    parser.error("restore-data 必须提供 --backup-file")
+                restored = restore_sqlite_database(config.storage.database, args.backup_file, backup_dir)
+                rollback = f"；恢复前备份：{restored.rollback_backup}" if restored.rollback_backup else ""
+                print(f"SQLite 数据恢复完成：{restored.source_backup}{rollback}")
+        except Exception as exc:
+            print(f"SQLite 数据备份或恢复失败：{exc}", file=sys.stderr)
+            return 1
+        return 0
     store = create_market_data_store(config)
     if args.command == "sync-history":
         try:
@@ -218,6 +237,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         for symbol, count in counts.items():
             print(f"已同步 {symbol} 指数历史 K 线 {count} 条。")
+        return 0
+    if args.command == "sync-instruments":
+        try:
+            count = sync_instrument_catalog(config, store)
+        except Exception as exc:
+            print(f"同步全量证券目录失败：{exc}", file=sys.stderr)
+            return 1
+        print(f"已同步沪深股票/ETF 目录 {count} 条。")
         return 0
     if args.command == "run-once":
         try:

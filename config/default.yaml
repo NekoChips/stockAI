@@ -1,4 +1,5 @@
 {
+  "environment": "development",
   "market": {
     "timezone": "Asia/Shanghai",
     "allowed_exchanges": ["SH", "SZ"],
@@ -40,7 +41,8 @@
   },
   "storage": {
     "driver": "sqlite",
-    "database": "data/stock_ai_agent.sqlite3"
+    "database": "data/stock_ai_agent.sqlite3",
+    "backup_dir": "data/backups"
   },
   "monitor": {
     "poll_seconds": 60,
