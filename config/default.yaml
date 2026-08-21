@@ -6,9 +6,10 @@
     "allowed_asset_types": ["stock", "etf"]
   },
   "data": {
-    "provider": "akshare",
-    "history_provider": "akshare",
-    "history_fallback_providers": ["eastmoney_public"],
+    "provider": "alphafeed",
+    "market_fallback_providers": ["akshare"],
+    "history_provider": "alphafeed",
+    "history_fallback_providers": ["akshare", "eastmoney_public"],
     "freshness_seconds": 90,
     "history": {
       "interval": "daily",
@@ -17,10 +18,20 @@
       "end": "20500101",
       "monitor_minimum_bars": 35,
       "monitor_history_limit": 80,
-      "retry_attempts": 2,
+      "retry_attempts": 1,
       "retry_backoff_seconds": 1
     },
     "providers": {
+      "alphafeed": {
+        "api_key_env": "ALPHAFEED_API_KEY",
+        "min_request_interval_seconds": 7.5,
+        "quote_cache_seconds": 3,
+        "quote_max_symbols_per_request": 5,
+        "quote_max_requests_per_minute": 8,
+        "kline_max_symbols_per_request": 1,
+        "kline_max_requests_per_minute": 8,
+        "history_count": 2000
+      },
       "akshare": {
         "stock_spot_function": "stock_zh_a_spot_em",
         "fund_spot_function": "fund_etf_spot_em",

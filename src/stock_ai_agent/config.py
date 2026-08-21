@@ -26,6 +26,7 @@ class BenchmarkConfig:
 @dataclass(frozen=True)
 class DataConfig:
     provider: str
+    market_fallback_providers: List[str]
     history_provider: str
     history_fallback_providers: List[str]
     freshness_seconds: int
@@ -136,6 +137,7 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
         allowed_asset_types=list(market["allowed_asset_types"]),
         data=DataConfig(
             provider=data["provider"],
+            market_fallback_providers=[str(item) for item in data.get("market_fallback_providers", ["akshare"])],
             history_provider=data.get("history_provider", data["provider"]),
             history_fallback_providers=[str(item) for item in data.get("history_fallback_providers", [])],
             freshness_seconds=int(data["freshness_seconds"]),

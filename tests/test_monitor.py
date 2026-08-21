@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
@@ -169,6 +169,102 @@ class MonitorTests(unittest.TestCase):
         self.assertTrue(all(count >= 35 for count in counts))
         self.assertEqual(self.startup_result.status, "traded")
 
+    def test_initialization_reuses_sufficient_database_history_without_remote_kline_call(self):
+        config = load_config()
+        trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+        class CountingHistoryProvider:
+            def __init__(self):
+                self.calls = []
+
+            def get_bars(self, symbol, **kwargs):
+                self.calls.append((symbol, kwargs))
+                return bars(symbol)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
+            for item in config.universe:
+                store.save_bars(bars(item.symbol), source="mock")
+            history = CountingHistoryProvider()
+            monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider(), history)
+            with patch("stock_ai_agent.monitor.sync_instrument_catalog", return_value=2), patch(
+                "stock_ai_agent.monitor.sync_benchmark_history", return_value={}
+            ):
+                ready, warnings = monitor.initialize_trading_data(trade_now.date())
+
+        self.assertTrue(ready)
+        self.assertEqual(warnings, [])
+        self.assertEqual(history.calls, [])
+
+    def test_intraday_daily_reference_sync_does_not_refresh_kline_history(self):
+        config = load_config()
+
+        class InlineThread:
+            def __init__(self, target, args=(), daemon=False):
+                self.target = target
+                self.args = args
+
+            def start(self):
+                self.target(*self.args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
+            monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
+            with patch("stock_ai_agent.monitor.Thread", InlineThread), patch.object(
+                monitor, "_sync_catalog_in_background"
+            ) as catalog_sync, patch.object(monitor, "_sync_reference_data_in_background") as history_sync:
+                monitor._sync_daily_reference_data(date(2026, 8, 17))
+
+        catalog_sync.assert_called_once()
+        history_sync.assert_not_called()
+
+    def test_startup_benchmark_sync_stops_at_previous_weekday(self):
+        config = load_config()
+
+        class InlineThread:
+            def __init__(self, target, args=(), daemon=False):
+                self.target = target
+                self.args = args
+
+            def start(self):
+                self.target(*self.args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
+            for item in config.universe:
+                store.save_bars(bars(item.symbol), source="mock")
+            monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
+            with patch("stock_ai_agent.monitor.Thread", InlineThread), patch(
+                "stock_ai_agent.monitor.sync_instrument_catalog", return_value=2
+            ), patch("stock_ai_agent.monitor.sync_benchmark_history", return_value={}) as sync_benchmarks:
+                monitor.initialize_trading_data(date(2026, 8, 17))
+
+        self.assertEqual(sync_benchmarks.call_args.kwargs["as_of"], date(2026, 8, 14))
+
+    def test_post_close_starts_incremental_history_sync(self):
+        config = load_config()
+        close_now = datetime(2026, 8, 17, 15, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+        class InlineThread:
+            def __init__(self, target, args=(), daemon=False):
+                self.target = target
+                self.args = args
+
+            def start(self):
+                self.target(*self.args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
+            monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
+            updates = []
+            with patch("stock_ai_agent.monitor.Thread", InlineThread), patch.object(
+                monitor, "_sync_reference_data_in_background"
+            ) as history_sync:
+                monitor.run_forever(max_iterations=1, on_update=updates.append, now_fn=lambda: close_now)
+
+        self.assertEqual(updates[0].status, "reported")
+        history_sync.assert_called_once_with(close_now.date(), True)
+
     def test_monitor_does_not_trade_when_startup_history_is_still_insufficient(self):
         config = load_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
@@ -205,7 +301,8 @@ class MonitorTests(unittest.TestCase):
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
             monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider(), FailingHistoryProvider())
             updates = []
-            monitor.run_forever(max_iterations=1, on_update=updates.append, now_fn=lambda: close_now)
+            with patch.object(monitor, "_sync_reference_data_in_background"):
+                monitor.run_forever(max_iterations=1, on_update=updates.append, now_fn=lambda: close_now)
             report = store.load_daily_report(close_now.date())
 
         self.assertEqual(updates[0].status, "reported")

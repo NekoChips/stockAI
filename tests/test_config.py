@@ -11,9 +11,15 @@ class ConfigTests(unittest.TestCase):
     def test_default_config_matches_confirmed_decisions(self):
         config = load_config()
 
-        self.assertEqual(config.data.provider, "akshare")
-        self.assertEqual(config.data.history_provider, "akshare")
-        self.assertEqual(config.data.history_fallback_providers, ["eastmoney_public"])
+        self.assertEqual(config.data.provider, "alphafeed")
+        self.assertEqual(config.data.market_fallback_providers, ["akshare"])
+        self.assertEqual(config.data.history_provider, "alphafeed")
+        self.assertEqual(config.data.history_fallback_providers, ["akshare", "eastmoney_public"])
+        self.assertEqual(config.data.providers["alphafeed"]["quote_max_symbols_per_request"], 5)
+        self.assertEqual(config.data.providers["alphafeed"]["quote_max_requests_per_minute"], 8)
+        self.assertEqual(config.data.providers["alphafeed"]["kline_max_symbols_per_request"], 1)
+        self.assertEqual(config.data.providers["alphafeed"]["kline_max_requests_per_minute"], 8)
+        self.assertEqual(config.data.history["retry_attempts"], 1)
         self.assertEqual(config.data.providers["akshare"]["fund_spot_function"], "fund_etf_spot_em")
         self.assertEqual(config.storage.driver, "sqlite")
         self.assertEqual(config.environment, "development")

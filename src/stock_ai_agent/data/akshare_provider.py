@@ -167,14 +167,26 @@ class AKShareAdapter:
         self.ak = ak_module
 
     def get_quote(self, symbol: str) -> Quote:
-        ak = self._akshare()
         normalized = normalize_symbol(symbol)
-        if infer_asset_type(normalized) == "etf":
-            function_name = str(self.options.get("fund_spot_function") or "fund_etf_spot_em")
-        else:
-            function_name = str(self.options.get("stock_spot_function") or "stock_zh_a_spot_em")
-        table = getattr(ak, function_name)()
-        return parse_quote_table(table, normalized, freshness_seconds=self.freshness_seconds)
+        return self.get_quotes([normalized])[normalized]
+
+    def get_quotes(self, symbols: Iterable[str]) -> Dict[str, Quote]:
+        ak = self._akshare()
+        normalized_symbols = [normalize_symbol(symbol) for symbol in symbols]
+        tables: Dict[str, Any] = {}
+        for asset_type, group in (("etf", [item for item in normalized_symbols if infer_asset_type(item) == "etf"]), ("stock", [item for item in normalized_symbols if infer_asset_type(item) != "etf"])):
+            if not group:
+                continue
+            option_name = "fund_spot_function" if asset_type == "etf" else "stock_spot_function"
+            default_name = "fund_etf_spot_em" if asset_type == "etf" else "stock_zh_a_spot_em"
+            function_name = str(self.options.get(option_name) or default_name)
+            tables[asset_type] = getattr(ak, function_name)()
+        fetched_at = datetime.now(timezone.utc)
+        result = {}
+        for symbol in normalized_symbols:
+            asset_type = "etf" if infer_asset_type(symbol) == "etf" else "stock"
+            result[symbol] = parse_quote_table(tables[asset_type], symbol, fetched_at=fetched_at, freshness_seconds=self.freshness_seconds)
+        return result
 
     def search_instruments(self, query: str, limit: int = 12) -> List[Dict[str, str]]:
         """Search the public A-share and ETF spot lists by six-digit code or name."""
