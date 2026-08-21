@@ -6,6 +6,11 @@ from datetime import date
 
 logger = logging.getLogger(__name__)
 
+try:
+    import akshare as _akshare
+except ImportError:  # pragma: no cover - depends on the selected runtime image
+    _akshare = None
+
 
 class AShareTradingCalendar:
     """Cache the official A-share calendar returned by AKShare for this process."""
@@ -25,9 +30,9 @@ class AShareTradingCalendar:
 
     def _load(self) -> None:
         try:
-            import akshare as ak
-
-            frame = ak.tool_trade_date_hist_sina()
+            if _akshare is None:
+                raise RuntimeError("akshare 未安装")
+            frame = _akshare.tool_trade_date_hist_sina()
             values = frame.iloc[:, 0].tolist()
             self._dates = {date.fromisoformat(str(item)[:10]) for item in values}
         except Exception as exc:  # noqa: BLE001 - optional external calendar source

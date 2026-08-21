@@ -86,7 +86,7 @@ def run_once(
             current_values={instrument.symbol: current_value},
         )
         signals = [
-            TechnicalCompositeStrategy().evaluate(features, strategy_context),
+            TechnicalCompositeStrategy(config.strategy.technical).evaluate(features, strategy_context),
             TimeSeriesMomentumStrategy(config.strategy.quant.get("lookback_days", 20)).evaluate(instrument.symbol, features, quant_context),
             MeanReversionStrategy(Decimal(str(config.strategy.quant.get("mean_reversion_z", "-1.2")))).evaluate(instrument.symbol, features, quant_context),
             RelativeStrengthRotationStrategy(config.strategy.quant.get("lookback_days", 20)).evaluate(instrument.symbol, features, quant_context),
@@ -131,10 +131,13 @@ def run_once_from_store(
 ) -> RunResult:
     config = replace(config, universe=effective_watchlist(config, store))
     universe = Universe.from_config(config.universe)
-    bars_by_symbol = {
-        instrument.symbol: store.load_bars(instrument.symbol, interval=str(config.data.history.get("interval", "daily")), limit=history_limit)
-        for instrument in universe.instruments
-    }
+    symbols = [instrument.symbol for instrument in universe.instruments]
+    interval = str(config.data.history.get("interval", "daily"))
+    bars_by_symbol = (
+        store.load_bars_batch(symbols, interval=interval, limit=history_limit)
+        if hasattr(store, "load_bars_batch")
+        else {symbol: store.load_bars(symbol, interval=interval, limit=history_limit) for symbol in symbols}
+    )
     histories = {
         symbol: [bar.close_price for bar in bars]
         for symbol, bars in bars_by_symbol.items()
@@ -178,10 +181,13 @@ def sync_benchmarks(config: AppConfig, store: MarketDataStore, adapter=None) -> 
 
 def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> object:
     universe = Universe.from_config(config.universe)
-    bars_by_symbol = {
-        instrument.symbol: store.load_bars(instrument.symbol, interval=str(config.data.history.get("interval", "daily")))
-        for instrument in universe.instruments
-    }
+    symbols = [instrument.symbol for instrument in universe.instruments]
+    interval = str(config.data.history.get("interval", "daily"))
+    bars_by_symbol = (
+        store.load_bars_batch(symbols, interval=interval)
+        if hasattr(store, "load_bars_batch")
+        else {symbol: store.load_bars(symbol, interval=interval) for symbol in symbols}
+    )
     result = optimize_strategy_parameters(
         bars_by_symbol,
         fee_rate=config.paper_account.fee_rate,

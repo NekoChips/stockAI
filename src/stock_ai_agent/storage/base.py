@@ -16,6 +16,9 @@ class MarketDataStore(Protocol):
     def load_bars(self, symbol: str, interval: str = "daily", limit: int | None = None) -> List[Bar]:
         ...
 
+    def load_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None) -> dict[str, List[Bar]]:
+        ...
+
     def save_quotes(self, quotes: List[Quote]) -> int:
         ...
 

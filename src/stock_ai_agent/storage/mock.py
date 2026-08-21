@@ -51,6 +51,9 @@ class MockMarketDataStore:
         rows = sorted((bar for (item_symbol, item_interval, _), bar in self._bars.items() if item_symbol == symbol and item_interval == interval), key=lambda item: item.timestamp)
         return rows[-limit:] if limit is not None else rows
 
+    def load_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None) -> dict[str, list[Bar]]:
+        return {symbol: self.load_bars(symbol, interval=interval, limit=limit) for symbol in symbols}
+
     def save_quotes(self, quotes: list[Quote]) -> int:
         for quote in quotes:
             timestamp = datetime.combine(quote.timestamp, time.min) if isinstance(quote.timestamp, date) and not isinstance(quote.timestamp, datetime) else quote.timestamp

@@ -42,23 +42,24 @@ class MySQLMarketDataStore:
     def acquire_monitor_lock(self, name: str = "stockai_monitor") -> bool:
         """Acquire a MySQL advisory lock for the lifetime of one monitor process."""
         self.initialize()
-        if self._monitor_lock_connection is not None:
-            return True
-        import pymysql
+        with self._initialize_lock:
+            if self._monitor_lock_connection is not None:
+                return True
+            import pymysql
 
-        connection = pymysql.connect(host=self.host, port=self.port, user=self.username, password=self.password, database=self.database, charset="utf8mb4", autocommit=True)
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT GET_LOCK(%s, 0)", (name,))
-                row = cursor.fetchone()
-            if not row or int(row[0]) != 1:
+            connection = pymysql.connect(host=self.host, port=self.port, user=self.username, password=self.password, database=self.database, charset="utf8mb4", autocommit=True)
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT GET_LOCK(%s, 0)", (name,))
+                    row = cursor.fetchone()
+                if not row or int(row[0]) != 1:
+                    connection.close()
+                    return False
+                self._monitor_lock_connection = connection
+                return True
+            except Exception:
                 connection.close()
-                return False
-        except Exception:
-            connection.close()
-            raise
-        self._monitor_lock_connection = connection
-        return True
+                raise
 
     def release_monitor_lock(self, name: str = "stockai_monitor") -> None:
         connection = self._monitor_lock_connection
@@ -197,6 +198,26 @@ class MySQLMarketDataStore:
         else:
             rows = self._fetchall("SELECT * FROM (SELECT symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount FROM bars WHERE symbol=%s AND interval_name=%s ORDER BY timestamp_value DESC LIMIT %s) AS recent ORDER BY timestamp_value ASC", (symbol, interval, limit))
         return [_bar_from_row(row) for row in rows]
+
+    def load_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None) -> dict[str, List[Bar]]:
+        """Load all requested instruments in one query, then apply per-symbol limits."""
+        if not symbols:
+            return {}
+        self.initialize()
+        placeholders = ",".join(["%s"] * len(symbols))
+        rows = self._fetchall(
+            f"SELECT symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount "
+            f"FROM bars WHERE symbol IN ({placeholders}) AND interval_name=%s ORDER BY symbol ASC, timestamp_value DESC",
+            (*symbols, interval),
+        )
+        result = {symbol: [] for symbol in symbols}
+        for row in rows:
+            bucket = result.setdefault(row[0], [])
+            if limit is None or len(bucket) < limit:
+                bucket.append(_bar_from_row(row))
+        for symbol in result:
+            result[symbol].sort(key=lambda item: item.timestamp)
+        return result
 
     def save_quotes(self, quotes: List[Quote]) -> int:
         if not quotes:
