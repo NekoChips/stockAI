@@ -1,0 +1,15 @@
+{
+  "extends": "default.yaml",
+  "environment": "release",
+  "storage": {
+    "driver": "mysql",
+    "database": "${STOCK_AI_MYSQL_DATABASE}",
+    "mysql": {
+      "host": "${STOCK_AI_MYSQL_HOST}",
+      "port": 12306,
+      "database": "${STOCK_AI_MYSQL_DATABASE}",
+      "username": "${STOCK_AI_MYSQL_USERNAME}",
+      "password": "${STOCK_AI_MYSQL_PASSWORD}"
+    }
+  }
+}

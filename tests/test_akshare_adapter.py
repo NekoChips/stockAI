@@ -31,6 +31,12 @@ class FakeAKShare:
             {"日期": "2026-08-17", "开盘": "1.020", "收盘": "1.050", "最高": "1.060", "最低": "1.010", "成交量": "12000", "成交额": "12480.00"},
         ]
 
+    def stock_zh_a_spot_em(self):
+        return [
+            {"代码": "600519", "名称": "贵州茅台", "最新价": "1500"},
+            {"代码": "200001", "名称": "深物业B", "最新价": "5"},
+        ]
+
 
 class FakeIndexFallbackAKShare(FakeAKShare):
     def __init__(self):
@@ -48,6 +54,28 @@ class FakeIndexFallbackAKShare(FakeAKShare):
             {"date": "2026-08-17", "open": "3900", "close": "3980", "high": "3990", "low": "3890", "amount": "3"},
             {"date": "2026-08-18", "open": "3980", "close": "3999", "high": "4001", "low": "3970", "amount": "4"},
         ]
+
+
+class FakeCatalogFallbackAKShare(FakeAKShare):
+    def fund_etf_spot_em(self):
+        raise RuntimeError("eastmoney unavailable")
+
+    def fund_etf_spot_ths(self):
+        return [{"基金代码": "510300", "基金名称": "沪深300ETF"}]
+
+    def stock_zh_a_spot_em(self):
+        raise RuntimeError("eastmoney unavailable")
+
+    def stock_zh_a_spot_tx(self):
+        return [{"code": "600519", "name": "贵州茅台"}]
+
+
+class FakeHistoryFallbackAKShare(FakeAKShare):
+    def fund_etf_hist_em(self, symbol, period, start_date, end_date, adjust):
+        raise RuntimeError("eastmoney history unavailable")
+
+    def fund_etf_hist_sina(self, symbol):
+        return [{"date": "2026-08-17", "open": "1.020", "close": "1.050", "high": "1.060", "low": "1.010", "volume": "12000", "amount": "12480.00"}]
 
 
 class AKShareAdapterTests(unittest.TestCase):
@@ -78,6 +106,36 @@ class AKShareAdapterTests(unittest.TestCase):
 
         self.assertEqual(quote.name, "科创半导体ETF华夏")
         self.assertEqual(len(bars), 2)
+
+    def test_searches_stock_and_etf_by_code_or_name(self):
+        adapter = AKShareAdapter(ak_module=FakeAKShare())
+
+        etfs = adapter.search_instruments("588170")
+        stocks = adapter.search_instruments("茅台")
+
+        self.assertEqual(etfs, [{"symbol": "588170.SH", "name": "科创半导体ETF华夏", "asset_type": "etf"}])
+        self.assertEqual(stocks, [{"symbol": "600519.SH", "name": "贵州茅台", "asset_type": "stock"}])
+
+    def test_catalog_falls_back_when_eastmoney_spot_lists_are_unavailable(self):
+        adapter = AKShareAdapter(ak_module=FakeCatalogFallbackAKShare())
+
+        catalog = adapter.list_instruments()
+
+        self.assertEqual(
+            catalog,
+            [
+                {"symbol": "510300.SH", "name": "沪深300ETF", "asset_type": "etf"},
+                {"symbol": "600519.SH", "name": "贵州茅台", "asset_type": "stock"},
+            ],
+        )
+
+    def test_history_falls_back_to_sina_when_eastmoney_history_is_unavailable(self):
+        adapter = AKShareAdapter(ak_module=FakeHistoryFallbackAKShare())
+
+        bars = adapter.get_bars("588170.SH", start="20260801", end="20260817")
+
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(bars[0].close_price, Decimal("1.050"))
 
     def test_index_history_falls_back_to_tencent_source(self):
         fake = FakeIndexFallbackAKShare()

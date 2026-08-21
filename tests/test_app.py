@@ -1,4 +1,3 @@
-import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -48,7 +47,7 @@ def bars(symbol):
 
 
 class AppTests(unittest.TestCase):
-    def test_run_once_generates_decisions_and_markdown_report(self):
+    def test_run_once_generates_decisions_and_structured_report(self):
         config = load_config()
         histories = {
             "588170.SH": [Decimal("1.00")] * 21 + [Decimal("1.08")],
@@ -56,14 +55,21 @@ class AppTests(unittest.TestCase):
         }
         bars_by_symbol = {symbol: bars(symbol) for symbol in histories}
 
-        with tempfile.TemporaryDirectory() as tmp:
-            result = run_once(config, bars_by_symbol, histories, MockQuoteProvider(), tmp)
-            content = result.report_path.read_text(encoding="utf-8")
+        result = run_once(config, bars_by_symbol, histories, MockQuoteProvider())
 
         self.assertGreaterEqual(len(result.decisions), 1)
-        self.assertEqual(result.report_path.name, "daily_reports.md")
-        self.assertIn("A股模拟盘日报", content)
-        self.assertIn("执行逻辑与策略证据", content)
+        self.assertEqual(result.report["status"], "临时运行")
+        self.assertIn("decisions", result.report)
+
+    def test_run_once_skips_symbols_with_insufficient_history(self):
+        config = load_config()
+        histories = {item.symbol: [Decimal("1.00")] * 10 for item in config.universe}
+        bars_by_symbol = {symbol: bars(symbol)[:10] for symbol in histories}
+
+        result = run_once(config, bars_by_symbol, histories, MockQuoteProvider())
+
+        self.assertEqual(result.decisions, [])
+        self.assertEqual(result.fills, [])
 
 
 if __name__ == "__main__":

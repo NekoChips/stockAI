@@ -26,6 +26,15 @@ class BenchmarkPoint:
 
 
 @dataclass(frozen=True)
+class BenchmarkOutperformance:
+    series: str
+    day: date
+    agent_return: Decimal
+    benchmark_return: Decimal
+    difference: Decimal
+
+
+@dataclass(frozen=True)
 class ProfitRankRow:
     symbol: str
     name: str
@@ -77,6 +86,37 @@ def build_benchmark_comparison(
         ]
         points.extend(_normalize_series(benchmark_names.get(symbol, symbol), series))
     return points
+
+
+def build_benchmark_outperformance(
+    points: Iterable[BenchmarkPoint],
+    series_order: Iterable[str] | None = None,
+) -> List[BenchmarkOutperformance]:
+    """Compare each benchmark with the Agent on that benchmark's latest date."""
+    grouped: Dict[str, List[BenchmarkPoint]] = {}
+    for point in points:
+        grouped.setdefault(point.series, []).append(point)
+    agent_by_day = {point.day: point.return_rate for point in grouped.get("AI-Agent", [])}
+    names = list(series_order or [name for name in grouped if name != "AI-Agent"])
+    rows: List[BenchmarkOutperformance] = []
+    for name in names:
+        benchmark_points = grouped.get(name, [])
+        if not benchmark_points:
+            continue
+        latest = max(benchmark_points, key=lambda point: point.day)
+        agent_return = agent_by_day.get(latest.day)
+        if agent_return is None:
+            continue
+        rows.append(
+            BenchmarkOutperformance(
+                series=name,
+                day=latest.day,
+                agent_return=agent_return,
+                benchmark_return=latest.return_rate,
+                difference=(agent_return - latest.return_rate).quantize(Decimal("0.000001")),
+            )
+        )
+    return rows
 
 
 def build_profit_leaderboard(

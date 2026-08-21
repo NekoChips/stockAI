@@ -10,9 +10,10 @@ from typing import Dict, Iterable, List, Optional
 
 from .backtest import BacktestResult, optimize_strategy_parameters
 from .config import AppConfig, load_config
-from .data.providers import create_history_data_provider, create_market_data_provider
+from .data.providers import create_history_data_provider, create_market_data_provider, fetch_quotes
 from .features import build_features
-from .journal import generate_daily_report
+from .history_sync import missing_history_range
+from .journal import build_daily_report
 from .models import Bar, Decision, Fill, Portfolio
 from .monitor import RealTimePaperTradingMonitor
 from .paper_broker import PaperBroker, PaperBrokerError
@@ -25,11 +26,15 @@ from .quant_strategies import (
     VolatilityTargetStrategy,
 )
 from .risk import RiskEngine
+from .reference_data import sync_benchmark_history, sync_instrument_catalog
 from .storage.base import MarketDataStore
+from .storage.backup import backup_sqlite_database, restore_sqlite_database
+from .storage.mysql import MySQLMarketDataStore
 from .storage.sqlite import SQLiteMarketDataStore
 from .strategy import StrategyContext, TechnicalCompositeStrategy, aggregate_signals
 from .universe import Universe
 from .web import serve_dashboard
+from .watchlist import effective_watchlist
 
 
 @dataclass
@@ -37,12 +42,14 @@ class RunResult:
     portfolio: Portfolio
     decisions: List[Decision]
     fills: List[Fill]
-    report_path: Optional[Path] = None
+    report: Optional[dict] = None
 
 
 def create_market_data_store(config: AppConfig) -> MarketDataStore:
     if config.storage.driver == "sqlite":
         return SQLiteMarketDataStore(config.storage.database)
+    if config.storage.driver == "mysql":
+        return MySQLMarketDataStore(config.storage.mysql)
     raise ValueError(f"暂不支持的数据存储驱动：{config.storage.driver}")
 
 
@@ -51,7 +58,6 @@ def run_once(
     bars_by_symbol: Dict[str, List[Bar]],
     histories: Dict[str, List[Decimal]],
     quote_provider=None,
-    output_dir: str | Path = "reports",
     report_date: Optional[date] = None,
 ) -> RunResult:
     universe = Universe.from_config(config.universe)
@@ -61,11 +67,13 @@ def run_once(
     quote_provider = quote_provider or create_market_data_provider(config)
     decisions: List[Decision] = []
     fills: List[Fill] = []
+    minimum_history_bars = int(config.data.history.get("monitor_minimum_bars", 35))
+    quotes = fetch_quotes(quote_provider, [instrument.symbol for instrument in universe.instruments])
 
     for instrument in universe.instruments:
-        quote = quote_provider.get_quote(instrument.symbol)
+        quote = quotes[instrument.symbol]
         bars = bars_by_symbol.get(instrument.symbol)
-        if not bars:
+        if not bars or len(bars) < minimum_history_bars:
             continue
         features = build_features(instrument.symbol, bars, quote)
         current_weights = {symbol: portfolio.position_weight(symbol) for symbol in portfolio.positions}
@@ -102,18 +110,25 @@ def run_once(
                     )
                 )
 
-    path = generate_daily_report(report_date or date.today(), portfolio, decisions, fills, output_dir)
-    return RunResult(portfolio, decisions, fills, path)
+    report = build_daily_report(
+        report_date or date.today(),
+        portfolio,
+        decisions,
+        fills,
+        config.paper_account.initial_cash,
+        status="临时运行",
+    )
+    return RunResult(portfolio, decisions, fills, report)
 
 
 def run_once_from_store(
     config: AppConfig,
     store: MarketDataStore,
     quote_provider=None,
-    output_dir: str | Path = "reports",
     report_date: Optional[date] = None,
     history_limit: int = 80,
 ) -> RunResult:
+    config = replace(config, universe=effective_watchlist(config, store))
     universe = Universe.from_config(config.universe)
     bars_by_symbol = {
         instrument.symbol: store.load_bars(instrument.symbol, interval=str(config.data.history.get("interval", "daily")), limit=history_limit)
@@ -123,36 +138,41 @@ def run_once_from_store(
         symbol: [bar.close_price for bar in bars]
         for symbol, bars in bars_by_symbol.items()
     }
-    return run_once(config, bars_by_symbol, histories, quote_provider, output_dir, report_date)
+    return run_once(config, bars_by_symbol, histories, quote_provider, report_date)
 
 
-def sync_history(config: AppConfig, store: MarketDataStore, adapter=None) -> dict[str, int]:
+def sync_history(config: AppConfig, store: MarketDataStore, adapter=None, as_of: date | None = None) -> dict[str, int]:
+    config = replace(config, universe=effective_watchlist(config, store))
     universe = Universe.from_config(config.universe)
     adapter = adapter or create_history_data_provider(config)
     history_config = config.data.history
     interval = str(history_config.get("interval", "daily"))
     adjust = str(history_config.get("adjust", "qfq"))
-    start = str(history_config.get("start", "20240101"))
-    end = str(history_config.get("end", "20500101"))
+    configured_start = str(history_config.get("start", "20240101"))
+    configured_end = str(history_config.get("end", "20500101"))
     counts: dict[str, int] = {}
     for instrument in universe.instruments:
-        bars = adapter.get_bars(instrument.symbol, interval=interval, start=start, end=end, adjust=adjust)
-        counts[instrument.symbol] = store.save_bars(bars, interval=interval, source=config.data.history_provider)
+        symbol = instrument.symbol
+        range_to_sync = missing_history_range(
+            store,
+            symbol,
+            interval,
+            configured_start,
+            configured_end,
+            as_of,
+        )
+        if range_to_sync is None:
+            counts[symbol] = 0
+            continue
+        start, end = range_to_sync
+        bars = adapter.get_bars(symbol, interval=interval, start=start, end=end, adjust=adjust)
+        source = getattr(adapter, "last_source", "") or config.data.history_provider
+        counts[symbol] = store.save_bars(bars, interval=interval, source=source)
     return counts
 
 
 def sync_benchmarks(config: AppConfig, store: MarketDataStore, adapter=None) -> dict[str, int]:
-    adapter = adapter or create_history_data_provider(config)
-    history_config = config.data.history
-    start = str(history_config.get("start", "20240101"))
-    end = str(history_config.get("end", "20500101"))
-    counts: dict[str, int] = {}
-    if not hasattr(adapter, "get_index_bars"):
-        raise ValueError("当前历史数据源暂不支持指数历史 K 线同步。")
-    for benchmark in config.benchmarks:
-        bars = adapter.get_index_bars(benchmark.symbol, benchmark.akshare_symbol, start=start, end=end)
-        counts[benchmark.symbol] = store.save_bars(bars, interval="daily", source=f"{config.data.history_provider}_benchmark")
-    return counts
+    return sync_benchmark_history(config, store, adapter)
 
 
 def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> object:
@@ -177,29 +197,49 @@ def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> o
     return result
 
 
-def post_close(portfolio: Portfolio, decisions: Iterable[Decision], fills: Iterable[Fill], output_dir: str | Path = "reports", report_date: Optional[date] = None) -> Path:
-    return generate_daily_report(report_date or date.today(), portfolio, decisions, fills, output_dir)
+def post_close(portfolio: Portfolio, decisions: Iterable[Decision], fills: Iterable[Fill], report_date: Optional[date] = None) -> dict:
+    return build_daily_report(report_date or date.today(), portfolio, decisions, fills)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="A股沪深模拟盘 AI-Agent")
     parser.add_argument(
         "command",
-        choices=["sync-history", "sync-benchmarks", "run-once", "monitor", "post-close", "optimize-strategy", "web"],
-        help="同步历史 K 线、同步指数、运行模拟、实时盯盘、收盘日报、回测优化或启动 Web",
+        choices=["sync-history", "sync-benchmarks", "sync-instruments", "backup-data", "restore-data", "run-once", "monitor", "post-close", "optimize-strategy", "web"],
+        help="同步行情、备份或恢复数据、运行模拟、实时盯盘、收盘日报、回测优化或启动 Web",
     )
     parser.add_argument("--config", default="config/default.yaml", help="配置文件路径")
-    parser.add_argument("--reports", default="reports", help="日报输出目录")
     parser.add_argument("--poll-seconds", type=int, default=None, help="实时盯盘轮询间隔秒数，默认读取配置")
     parser.add_argument("--max-iterations", type=int, default=None, help="实时盯盘最多执行轮数，默认持续运行")
     parser.add_argument("--ignore-market-hours", action="store_true", help="忽略 A 股交易时段限制，便于本地验证")
     parser.add_argument("--host", default="127.0.0.1", help="Web 服务监听地址")
     parser.add_argument("--port", type=int, default=8765, help="Web 服务监听端口")
+    parser.add_argument("--backup-dir", default=None, help="SQLite 备份目录，默认读取配置")
+    parser.add_argument("--backup-file", default=None, help="要恢复的 SQLite 备份文件路径")
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
     if args.poll_seconds is not None:
         config = replace(config, monitor=replace(config.monitor, poll_seconds=args.poll_seconds))
+    if args.command in {"backup-data", "restore-data"}:
+        if config.storage.driver != "sqlite":
+            print("数据备份与恢复命令当前仅支持 SQLite 开发环境。", file=sys.stderr)
+            return 1
+        backup_dir = args.backup_dir or config.storage.backup_dir
+        try:
+            if args.command == "backup-data":
+                backup = backup_sqlite_database(config.storage.database, backup_dir)
+                print(f"SQLite 数据备份完成：{backup.path}")
+            else:
+                if not args.backup_file:
+                    parser.error("restore-data 必须提供 --backup-file")
+                restored = restore_sqlite_database(config.storage.database, args.backup_file, backup_dir)
+                rollback = f"；恢复前备份：{restored.rollback_backup}" if restored.rollback_backup else ""
+                print(f"SQLite 数据恢复完成：{restored.source_backup}{rollback}")
+        except Exception as exc:
+            print(f"SQLite 数据备份或恢复失败：{exc}", file=sys.stderr)
+            return 1
+        return 0
     store = create_market_data_store(config)
     if args.command == "sync-history":
         try:
@@ -219,21 +259,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         for symbol, count in counts.items():
             print(f"已同步 {symbol} 指数历史 K 线 {count} 条。")
         return 0
+    if args.command == "sync-instruments":
+        try:
+            count = sync_instrument_catalog(config, store)
+        except Exception as exc:
+            print(f"同步全量证券目录失败：{exc}", file=sys.stderr)
+            return 1
+        print(f"已同步沪深股票/ETF 目录 {count} 条。")
+        return 0
     if args.command == "run-once":
         try:
-            result = run_once_from_store(config, store, output_dir=args.reports)
+            result = run_once_from_store(config, store)
         except Exception as exc:
             print(f"模拟运行失败：{exc}", file=sys.stderr)
             return 1
-        print(f"已完成一次模拟运行，生成日报：{result.report_path}")
+        print(f"已完成一次临时模拟运行：{result.report['report_date']}（不会覆盖正式日报归档）")
         return 0
     if args.command == "monitor":
-        monitor = RealTimePaperTradingMonitor(config, store, output_dir=args.reports)
+        monitor = RealTimePaperTradingMonitor(config, store)
 
         def print_update(result) -> None:
             detail = f"；本轮成交 {len(result.fills)} 笔，决策 {len(result.decisions)} 条"
-            if result.report_path:
-                detail = f"；日报：{result.report_path}"
+            if result.report:
+                detail = f"；日报归档：{result.report['report_date']}"
             print(f"{result.status}：{result.message}{detail}")
 
         try:
@@ -266,9 +314,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"启动 Web 驾驶舱失败：{exc}", file=sys.stderr)
             return 1
         return 0
-    monitor = RealTimePaperTradingMonitor(config, store, output_dir=args.reports)
-    path = monitor.generate_post_close_report()
-    print(f"已生成本地 Markdown 收盘日报：{path}")
+    monitor = RealTimePaperTradingMonitor(config, store)
+    report = monitor.generate_post_close_report()
+    print(f"收盘日报已归档到数据库：{report['report_date']}")
     return 0
 
 

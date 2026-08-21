@@ -2,97 +2,103 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable
 
 from .models import Decision, Fill, Portfolio
 
 
-def money(value: Decimal) -> str:
-    return f"{value:,.2f}"
-
-
-def generate_daily_report(
+def build_daily_report(
     report_date: date,
     portfolio: Portfolio,
     decisions: Iterable[Decision],
     fills: Iterable[Fill],
-    output_dir: str | Path = "reports",
-    filename: str = "daily_reports.md",
-) -> Path:
+    previous_total_asset: Decimal | None = None,
+    status: str = "已归档",
+    system_notes: Iterable[str] = (),
+) -> dict:
+    """Build a database-ready, provider-neutral daily paper-trading report."""
     decisions = list(decisions)
     fills = list(fills)
-    output = Path(output_dir)
-    output.mkdir(parents=True, exist_ok=True)
-    path = output / filename
-    heading = f"# {report_date.isoformat()} A股模拟盘日报"
+    total_asset = portfolio.total_asset()
+    previous_asset = previous_total_asset if previous_total_asset is not None else total_asset
+    daily_pnl = (total_asset - previous_asset).quantize(Decimal("0.01"))
+    daily_return = daily_pnl / previous_asset if previous_asset else Decimal("0")
+    total_market_value = portfolio.total_market_value()
+    position_ratio = total_market_value / total_asset if total_asset else Decimal("0")
 
-    lines: List[str] = [
-        heading,
-        "",
-        "## 账户概览",
-        "",
-        f"- 总资产：{money(portfolio.total_asset())} 元",
-        f"- 现金：{money(portfolio.cash)} 元",
-        f"- 总持仓市值：{money(portfolio.total_market_value())} 元",
-        "",
-        "## 当前持仓",
-        "",
+    position_rows = [
+        {
+            "symbol": position.symbol,
+            "quantity": position.quantity,
+            "available_quantity": position.available_quantity,
+            "average_cost": str(position.average_cost),
+            "last_price": str(position.last_price),
+            "market_value": str(position.market_value),
+            "position_weight": str(portfolio.position_weight(position.symbol)),
+            "realized_pnl": str(position.realized_pnl),
+            "unrealized_pnl": str(position.unrealized_pnl),
+        }
+        for position in sorted(portfolio.positions.values(), key=lambda item: item.symbol)
     ]
-    if portfolio.positions:
-        for symbol, position in portfolio.positions.items():
-            lines.append(
-                f"- {symbol}：数量 {position.quantity}，可卖 {position.available_quantity}，成本 {position.average_cost}，市值 {money(position.market_value)} 元，仓位 {portfolio.position_weight(symbol):.2%}，浮盈浮亏 {money(position.unrealized_pnl)} 元"
-            )
+    fill_rows = [
+        {
+            "symbol": fill.symbol,
+            "direction": fill.direction.value,
+            "quantity": fill.quantity,
+            "price": str(fill.price),
+            "fee": str(fill.fee),
+            "slippage": str(fill.slippage),
+            "gross_amount": str(fill.gross_amount),
+            "timestamp": fill.timestamp.isoformat(),
+        }
+        for fill in fills
+    ]
+    decision_rows = []
+    for decision in decisions:
+        signal = decision.source_signal
+        decision_rows.append(
+            {
+                "symbol": decision.symbol,
+                "direction": decision.direction.value,
+                "target_weight": str(decision.target_weight),
+                "approved": decision.approved,
+                "risk_reasons": list(decision.reasons),
+                "strategy_id": signal.strategy_id if signal else "",
+                "score": str(signal.score) if signal else "0",
+                "confidence": str(signal.confidence) if signal else "0",
+                "explanation": signal.explanation if signal else "",
+                "evidence": list(signal.evidence) if signal else [],
+                "objections": list(signal.objections) if signal else [],
+                "version": signal.version if signal else "",
+            }
+        )
+
+    return {
+        "report_date": report_date.isoformat(),
+        "status": status,
+        "summary": _build_summary(position_rows, fill_rows, decision_rows),
+        "system_notes": list(system_notes),
+        "account": {
+            "cash": str(portfolio.cash),
+            "total_asset": str(total_asset),
+            "total_market_value": str(total_market_value),
+            "position_ratio": str(position_ratio),
+            "daily_pnl": str(daily_pnl),
+            "daily_return": str(daily_return),
+            "previous_total_asset": str(previous_asset),
+        },
+        "positions": position_rows,
+        "fills": fill_rows,
+        "decisions": decision_rows,
+    }
+
+
+def _build_summary(positions: list[dict], fills: list[dict], decisions: list[dict]) -> str:
+    if not fills:
+        action = "今日没有模拟成交"
     else:
-        lines.append("- 当前无持仓。")
-
-    lines.extend(["", "## 今日操作", ""])
-    if fills:
-        for fill in fills:
-            lines.append(f"- {fill.direction.value} {fill.symbol} {fill.quantity} 份，成交价 {fill.price}，手续费 {fill.fee} 元。")
-    else:
-        lines.append("- 今日无模拟成交。")
-
-    lines.extend(["", "## 执行逻辑与策略证据", ""])
-    if decisions:
-        for decision in decisions:
-            status = "通过" if decision.approved else "拒绝"
-            lines.append(f"- {decision.symbol}：{decision.direction.value}，风控{status}，目标仓位 {decision.target_weight:.0%}。")
-            if decision.source_signal:
-                lines.append(f"  - 技术/量化解释：{decision.source_signal.explanation}")
-                for item in decision.source_signal.evidence[:5]:
-                    lines.append(f"  - 支持证据：{item}")
-                for item in decision.source_signal.objections[:5]:
-                    lines.append(f"  - 反对因素：{item}")
-            for reason in decision.reasons:
-                lines.append(f"  - 风控说明：{reason}")
-    else:
-        lines.append("- 今日没有策略决策。")
-
-    lines.extend(["", "## 明日关注", "", "- 继续观察固定 ETF 池的趋势、动量、波动率、成交量和相对强弱变化。"])
-    section = "\n".join(lines) + "\n"
-    path.write_text(_replace_or_append_section(path, heading, section), encoding="utf-8")
-    return path
-
-
-def _replace_or_append_section(path: Path, heading: str, section: str) -> str:
-    if not path.exists():
-        return section
-    content = path.read_text(encoding="utf-8")
-    lines = content.splitlines()
-    start = None
-    for index, line in enumerate(lines):
-        if line == heading:
-            start = index
-            break
-    if start is None:
-        return content.rstrip() + "\n\n" + section
-    end = len(lines)
-    for index in range(start + 1, len(lines)):
-        if lines[index].startswith("# ") and lines[index].endswith("A股模拟盘日报"):
-            end = index
-            break
-    replacement = section.rstrip().splitlines()
-    new_lines = lines[:start] + replacement + lines[end:]
-    return "\n".join(new_lines).rstrip() + "\n"
+        directions = "、".join(dict.fromkeys(str(item["direction"]) for item in fills))
+        action = f"今日完成 {len(fills)} 笔模拟成交，包含{directions}操作"
+    position_text = f"收盘持有 {len(positions)} 只证券" if positions else "收盘保持空仓"
+    decision_text = f"策略形成 {len(decisions)} 条决策记录" if decisions else "策略未形成可执行决策"
+    return f"{action}；{position_text}；{decision_text}。"

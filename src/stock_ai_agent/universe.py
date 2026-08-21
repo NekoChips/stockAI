@@ -19,6 +19,9 @@ class UniverseError(ValueError):
 
 def normalize_symbol(symbol: str) -> str:
     clean = symbol.strip().upper()
+    prefixed = re.fullmatch(r"(SH|SZ)(\d{6})", clean)
+    if prefixed:
+        return f"{prefixed.group(2)}.{prefixed.group(1)}"
     if "." not in clean and clean.isdigit() and len(clean) == 6:
         if clean.startswith(("5", "6", "9")):
             return f"{clean}.SH"

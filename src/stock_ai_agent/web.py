@@ -1,52 +1,97 @@
 from __future__ import annotations
 
+import gzip
 import json
 from dataclasses import asdict, is_dataclass
 from datetime import date
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .analytics import (
     build_benchmark_comparison,
+    build_benchmark_outperformance,
     build_profit_calendar,
     build_profit_leaderboard,
     compute_period_returns,
     fill_daily_snapshots,
 )
 from .config import AppConfig
+from .instrument_detail import build_instrument_detail_payload
+from .universe import infer_asset_type, validate_hs_symbol
+from .watchlist import add_watchlist_item, effective_watchlist, remove_watchlist_item
 
 
 ANALYSIS_START_DATE = date(2026, 1, 1)
 
 
-def build_dashboard_payload(config: AppConfig, store, as_of: date | None = None) -> dict[str, Any]:
+def build_dashboard_payload(
+    config: AppConfig,
+    store,
+    as_of: date | None = None,
+    performance_start: date | None = None,
+    performance_end: date | None = None,
+) -> dict[str, Any]:
+    as_of = as_of or date.today()
+    stored_snapshots = store.load_portfolio_snapshots()
+    payload = {
+        **build_dashboard_overview_payload(config, store, as_of, stored_snapshots),
+        **build_dashboard_performance_payload(
+            config,
+            store,
+            as_of,
+            performance_start,
+            performance_end,
+            stored_snapshots,
+        ),
+        **build_dashboard_calendar_payload(config, store, as_of, stored_snapshots),
+        **build_dashboard_backtests_payload(store),
+    }
+    payload["period_returns"] = _to_jsonable(
+        compute_period_returns(
+            fill_daily_snapshots(
+                stored_snapshots,
+                ANALYSIS_START_DATE,
+                as_of,
+                config.paper_account.initial_cash,
+            )
+        )
+    )
+    return payload
+
+
+def build_dashboard_overview_payload(
+    config: AppConfig,
+    store,
+    as_of: date | None = None,
+    stored_snapshots=None,
+) -> dict[str, Any]:
     as_of = as_of or date.today()
     portfolio = store.load_portfolio(config.paper_account.initial_cash)
     snapshots = fill_daily_snapshots(
-        store.load_portfolio_snapshots(),
+        stored_snapshots if stored_snapshots is not None else store.load_portfolio_snapshots(),
         ANALYSIS_START_DATE,
         as_of,
         config.paper_account.initial_cash,
     )
-    names = {item.symbol: item.name for item in config.universe}
-    benchmark_names = {item.symbol: item.name for item in config.benchmarks}
-    benchmark_bars = {
-        item.symbol: store.load_bars(item.symbol, interval="daily")
-        for item in config.benchmarks
-    }
-    all_fills = store.load_all_fills() if hasattr(store, "load_all_fills") else []
-    benchmark_comparison = _complete_benchmark_series(
-        build_benchmark_comparison(
-            snapshots,
-            benchmark_bars,
-            benchmark_names,
-            start_date=ANALYSIS_START_DATE,
-            end_date=as_of,
-        ),
-        snapshots,
-        benchmark_names.values(),
+    watchlist = effective_watchlist(config, store)
+    configured = {item.symbol for item in config.universe}
+    watchlist_rows = [
+        {**asdict(item), "source": "默认配置" if item.symbol in configured else "手动添加"}
+        for item in watchlist
+    ]
+    names = {item.symbol: item.name for item in watchlist}
+    latest_quotes = (
+        store.load_latest_quotes([item.symbol for item in watchlist])
+        if hasattr(store, "load_latest_quotes")
+        else {}
     )
+    all_fills = store.load_all_fills() if hasattr(store, "load_all_fills") else []
+    backtest_runs = store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else []
+    period_returns = compute_period_returns(snapshots)
+    daily_returns = period_returns.get("daily", [])
     return _to_jsonable(
         {
             "portfolio": {
@@ -57,15 +102,120 @@ def build_dashboard_payload(config: AppConfig, store, as_of: date | None = None)
             },
             "recent_fills": all_fills[-20:],
             "today_decisions": store.load_decisions(as_of) if hasattr(store, "load_decisions") else [],
-            "equity_curve": [{"day": day, "total_asset": value} for day, value in snapshots],
-            "period_returns": compute_period_returns(snapshots),
-            "benchmark_comparison": benchmark_comparison,
+            "daily_return": daily_returns[-1].return_rate if daily_returns else 0,
             "profit_leaderboard": build_profit_leaderboard(portfolio, all_fills, names, as_of=as_of),
-            "profit_calendar": build_profit_calendar(snapshots),
-            "backtest_runs": store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else [],
+            "watchlist": watchlist_rows,
+            "market_quotes": latest_quotes,
+            "pending_backtest_count": sum(item.get("status") != "已确认" for item in backtest_runs),
+        }
+    )
+
+
+def build_dashboard_performance_payload(
+    config: AppConfig,
+    store,
+    as_of: date | None = None,
+    performance_start: date | None = None,
+    performance_end: date | None = None,
+    stored_snapshots=None,
+) -> dict[str, Any]:
+    as_of = as_of or date.today()
+    selected_start, selected_end = _performance_range(performance_start, performance_end, as_of)
+    performance_snapshots = fill_daily_snapshots(
+        stored_snapshots if stored_snapshots is not None else store.load_portfolio_snapshots(),
+        selected_start,
+        selected_end,
+        config.paper_account.initial_cash,
+    )
+    benchmark_names = {item.symbol: item.name for item in config.benchmarks}
+    benchmark_bars = {
+        item.symbol: store.load_bars(item.symbol, interval="daily")
+        for item in config.benchmarks
+    }
+    benchmark_comparison = build_benchmark_comparison(
+        performance_snapshots,
+        benchmark_bars,
+        benchmark_names,
+        start_date=selected_start,
+        end_date=selected_end,
+    )
+    benchmark_outperformance = build_benchmark_outperformance(
+        benchmark_comparison,
+        [item.name for item in config.benchmarks],
+    )
+    benchmark_status = [
+        {
+            "symbol": item.symbol,
+            "name": item.name,
+            "state": "可用" if benchmark_bars[item.symbol] else "待同步",
+            "points": len(benchmark_bars[item.symbol]),
+            "latest_day": benchmark_bars[item.symbol][-1].timestamp.date() if benchmark_bars[item.symbol] else None,
+        }
+        for item in config.benchmarks
+    ]
+    return _to_jsonable(
+        {
+            "equity_curve": [{"day": day, "total_asset": value} for day, value in performance_snapshots],
+            "benchmark_comparison": benchmark_comparison,
+            "benchmark_outperformance": benchmark_outperformance,
+            "performance_range": {"start_date": selected_start, "end_date": selected_end},
+            "benchmark_status": benchmark_status,
             "benchmarks": benchmark_names,
         }
     )
+
+
+def build_dashboard_calendar_payload(
+    config: AppConfig,
+    store,
+    as_of: date | None = None,
+    stored_snapshots=None,
+) -> dict[str, Any]:
+    as_of = as_of or date.today()
+    snapshots = fill_daily_snapshots(
+        stored_snapshots if stored_snapshots is not None else store.load_portfolio_snapshots(),
+        ANALYSIS_START_DATE,
+        as_of,
+        config.paper_account.initial_cash,
+    )
+    return _to_jsonable({"profit_calendar": build_profit_calendar(snapshots)})
+
+
+def build_dashboard_backtests_payload(store) -> dict[str, Any]:
+    runs = store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else []
+    return _to_jsonable({"backtest_runs": runs})
+
+
+def build_dashboard_reports_payload(store, limit: int = 60, offset: int = 0) -> dict[str, Any]:
+    reports = store.load_daily_reports(limit=limit, offset=offset) if hasattr(store, "load_daily_reports") else []
+    return _to_jsonable({"daily_reports": reports})
+
+
+def build_dashboard_report_payload(store, report_date: date) -> dict[str, Any]:
+    report = store.load_daily_report(report_date) if hasattr(store, "load_daily_report") else None
+    return _to_jsonable({"daily_report": report})
+
+
+def _performance_range(
+    requested_start: date | None,
+    requested_end: date | None,
+    as_of: date,
+) -> tuple[date, date]:
+    start = max(requested_start or ANALYSIS_START_DATE, ANALYSIS_START_DATE)
+    end = min(requested_end or as_of, as_of)
+    if end < start:
+        raise ValueError("盈亏分析结束日期不能早于开始日期。")
+    return start, end
+
+
+def _query_date(values: dict[str, list[str]], name: str) -> date | None:
+    raw = values.get(name, [""])[0].strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} 必须使用 YYYY-MM-DD 格式。") from exc
 
 
 def confirm_backtest_runs(config: AppConfig, store, run_ids: list[int]) -> dict[str, Any]:
@@ -78,20 +228,159 @@ def confirm_backtest_runs(config: AppConfig, store, run_ids: list[int]) -> dict[
     )
 
 
+def search_watchlist_instruments(config: AppConfig, store, query: str, provider=None, limit: int = 12) -> list[dict[str, str]]:
+    text = str(query).strip().upper()
+    if len(text) < 2:
+        return []
+    catalog_matches = store.search_instrument_catalog(text, limit=limit) if hasattr(store, "search_instrument_catalog") else []
+    if catalog_matches:
+        return catalog_matches
+    direct_code = text.split(".", 1)[0]
+    if direct_code.isdigit() and len(direct_code) == 6 and text in {direct_code, f"{direct_code}.SH", f"{direct_code}.SZ"}:
+        try:
+            symbol = validate_hs_symbol(text)
+            return [{"symbol": symbol, "name": "名称待目录同步", "asset_type": infer_asset_type(symbol)}]
+        except ValueError:
+            return []
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in effective_watchlist(config, store):
+        if text not in item.symbol and text not in item.name.upper():
+            continue
+        results.append({"symbol": item.symbol, "name": item.name, "asset_type": item.asset_type})
+        seen.add(item.symbol)
+    if results:
+        return results[:limit]
+    if provider is not None and hasattr(provider, "search_instruments"):
+        for item in provider.search_instruments(text, limit=limit):
+            symbol = str(item.get("symbol") or "")
+            if not symbol or symbol in seen:
+                continue
+            results.append({
+                "symbol": symbol,
+                "name": str(item.get("name") or symbol),
+                "asset_type": str(item.get("asset_type") or "stock"),
+            })
+            seen.add(symbol)
+            if len(results) >= limit:
+                break
+    return results[:limit]
+
+
+def add_dashboard_watchlist_item(config: AppConfig, store, payload: dict[str, Any]) -> dict[str, Any]:
+    item = add_watchlist_item(
+        config,
+        store,
+        str(payload.get("symbol") or ""),
+        str(payload.get("name") or ""),
+        str(payload.get("asset_type") or "") or None,
+    )
+    return _to_jsonable({"item": item, "dashboard": build_dashboard_overview_payload(config, store)})
+
+
+def remove_dashboard_watchlist_item(config: AppConfig, store, symbol: str) -> dict[str, Any]:
+    removed = remove_watchlist_item(config, store, symbol)
+    overview = build_dashboard_overview_payload(config, store)
+    return _to_jsonable({"removed": removed, "watchlist": overview["watchlist"], "dashboard": overview})
+
+
 def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            if self.path == "/" or self.path.startswith("/?"):
+            request = urlparse(self.path)
+            if request.path == "/":
                 _send(self, "text/html; charset=utf-8", render_dashboard_html().encode("utf-8"))
                 return
-            if self.path == "/api/dashboard":
-                payload = json.dumps(build_dashboard_payload(config, store), ensure_ascii=False).encode("utf-8")
+            if request.path == "/healthz":
+                _send(self, "application/json; charset=utf-8", b'{"status":"ok"}')
+                return
+            if request.path == "/api/dashboard/overview":
+                payload = build_dashboard_overview_payload(config, store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard/performance":
+                try:
+                    query = parse_qs(request.query)
+                    payload = build_dashboard_performance_payload(
+                        config,
+                        store,
+                        performance_start=_query_date(query, "performance_start"),
+                        performance_end=_query_date(query, "performance_end"),
+                    )
+                except ValueError as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard/calendar":
+                payload = build_dashboard_calendar_payload(config, store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard/backtests":
+                payload = build_dashboard_backtests_payload(store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            instrument_prefix = "/api/instruments/"
+            if request.path.startswith(instrument_prefix) and request.path.endswith("/detail"):
+                symbol = unquote(request.path[len(instrument_prefix):-len("/detail")]).rstrip("/")
+                try:
+                    payload = _to_jsonable(build_instrument_detail_payload(config, store, symbol))
+                except ValueError as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard/reports":
+                query = parse_qs(request.query)
+                try:
+                    limit = min(200, max(1, int(query.get("limit", ["60"])[0])))
+                    offset = max(0, int(query.get("offset", ["0"])[0]))
+                except ValueError:
+                    _send_error(self, 400, "limit 和 offset 必须是整数。")
+                    return
+                payload = build_dashboard_reports_payload(store, limit, offset)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            report_prefix = "/api/dashboard/reports/"
+            if request.path.startswith(report_prefix):
+                try:
+                    report_date = date.fromisoformat(unquote(request.path[len(report_prefix):]))
+                except ValueError:
+                    _send_error(self, 400, "日报日期必须使用 YYYY-MM-DD 格式。")
+                    return
+                payload = build_dashboard_report_payload(store, report_date)
+                if payload["daily_report"] is None:
+                    _send_error(self, 404, "未找到该日期的日报。")
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard":
+                try:
+                    query = parse_qs(request.query)
+                    payload_data = build_dashboard_payload(
+                        config,
+                        store,
+                        performance_start=_query_date(query, "performance_start"),
+                        performance_end=_query_date(query, "performance_end"),
+                    )
+                except ValueError as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
                 _send(self, "application/json; charset=utf-8", payload)
+                return
+            if request.path == "/api/watchlist/search":
+                query = parse_qs(request.query).get("q", [""])[0]
+                results = search_watchlist_instruments(config, store, query)
+                status = store.instrument_catalog_status() if hasattr(store, "instrument_catalog_status") else {"count": 0, "synced_date": ""}
+                payload = {"items": results, "catalog": status}
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             self.send_error(404, "Not Found")
 
         def do_POST(self) -> None:
-            if self.path == "/api/backtests/confirm":
+            request = urlparse(self.path)
+            if request.path == "/api/backtests/confirm":
                 length = int(self.headers.get("Content-Length", "0") or "0")
                 body = self.rfile.read(length).decode("utf-8") if length else "{}"
                 try:
@@ -102,6 +391,30 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                     return
                 payload = json.dumps(confirm_backtest_runs(config, store, ids), ensure_ascii=False).encode("utf-8")
                 _send(self, "application/json; charset=utf-8", payload)
+                return
+            if request.path == "/api/watchlist":
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                body = self.rfile.read(length).decode("utf-8") if length else "{}"
+                try:
+                    data = json.loads(body)
+                    payload = add_dashboard_watchlist_item(config, store, data)
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            self.send_error(404, "Not Found")
+
+        def do_DELETE(self) -> None:
+            request = urlparse(self.path)
+            prefix = "/api/watchlist/"
+            if request.path.startswith(prefix):
+                try:
+                    payload = remove_dashboard_watchlist_item(config, store, unquote(request.path[len(prefix):]))
+                except ValueError as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             self.send_error(404, "Not Found")
 
@@ -114,6 +427,13 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
 
 
 def render_dashboard_html() -> str:
+    try:
+        return Path(__file__).with_name("dashboard.html").read_text(encoding="utf-8")
+    except OSError:
+        return _render_dashboard_html_legacy()
+
+
+def _render_dashboard_html_legacy() -> str:
     return """
 <!doctype html>
 <html lang="zh-CN">
@@ -644,26 +964,34 @@ def render_dashboard_html() -> str:
 </html>
 """
 
+def _send(handler: BaseHTTPRequestHandler, content_type: str, body: bytes, status: int = 200) -> None:
+    try:
+        headers = getattr(handler, "headers", {})
+        accept_encoding = headers.get("Accept-Encoding", "") if hasattr(headers, "get") else ""
+        if len(body) >= 1024 and "gzip" in accept_encoding.lower():
+            body = gzip.compress(body, compresslevel=5)
+            handler.send_response(status)
+            handler.send_header("Content-Type", content_type)
+            handler.send_header("Content-Encoding", "gzip")
+            handler.send_header("Vary", "Accept-Encoding")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.end_headers()
+            handler.wfile.write(body)
+            return
+        handler.send_response(status)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+        # Browsers, health checks, and reverse proxies may cancel a request
+        # after receiving enough data; the server has no work left to do.
+        return
 
-def _complete_benchmark_series(points: list[Any], snapshots, benchmark_names) -> list[Any]:
-    existing = {
-        point.series if hasattr(point, "series") else point.get("series")
-        for point in points
-    }
-    days = [day for day, _ in snapshots]
-    for name in benchmark_names:
-        if name in existing:
-            continue
-        points.extend({"series": name, "day": day, "return_rate": Decimal("0")} for day in days)
-    return points
 
-
-def _send(handler: BaseHTTPRequestHandler, content_type: str, body: bytes) -> None:
-    handler.send_response(200)
-    handler.send_header("Content-Type", content_type)
-    handler.send_header("Content-Length", str(len(body)))
-    handler.end_headers()
-    handler.wfile.write(body)
+def _send_error(handler: BaseHTTPRequestHandler, status: int, message: str) -> None:
+    body = json.dumps({"message": message}, ensure_ascii=False).encode("utf-8")
+    _send(handler, "application/json; charset=utf-8", body, status)
 
 
 def _to_jsonable(value: Any) -> Any:

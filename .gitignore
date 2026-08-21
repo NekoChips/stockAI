@@ -1,5 +1,21 @@
 .DS_Store
 
+# Local AI assistants, skills, and generated design systems
+.agents/
+.codex/
+.claude/
+.cursor/
+.gemini/
+.skills/
+design-system/
+
+# AI planning, review, and workflow artifacts
+/design.md
+/plan.md
+/review.md
+/final_report.md
+/openspec/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -17,5 +33,12 @@ env/
 # Local runtime data
 data/*.sqlite3
 data/*.sqlite3-*
+data/backups/
 reports/
 .learnings/
+
+# Deployment-only configuration and credentials
+config/*.local.yaml
+config/*.secret.yaml
+docker/.env.release
+dist/

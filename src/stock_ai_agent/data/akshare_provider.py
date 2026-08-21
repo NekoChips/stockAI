@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from zoneinfo import ZoneInfo
 
 from ..models import Bar, Quote
-from ..universe import infer_asset_type, normalize_symbol
+from ..universe import UniverseError, infer_asset_type, normalize_symbol, validate_hs_symbol
 
 
 class AKShareError(RuntimeError):
@@ -167,14 +167,96 @@ class AKShareAdapter:
         self.ak = ak_module
 
     def get_quote(self, symbol: str) -> Quote:
-        ak = self._akshare()
         normalized = normalize_symbol(symbol)
-        if infer_asset_type(normalized) == "etf":
-            function_name = str(self.options.get("fund_spot_function") or "fund_etf_spot_em")
-        else:
-            function_name = str(self.options.get("stock_spot_function") or "stock_zh_a_spot_em")
-        table = getattr(ak, function_name)()
-        return parse_quote_table(table, normalized, freshness_seconds=self.freshness_seconds)
+        return self.get_quotes([normalized])[normalized]
+
+    def get_quotes(self, symbols: Iterable[str]) -> Dict[str, Quote]:
+        ak = self._akshare()
+        normalized_symbols = [normalize_symbol(symbol) for symbol in symbols]
+        tables: Dict[str, Any] = {}
+        for asset_type, group in (("etf", [item for item in normalized_symbols if infer_asset_type(item) == "etf"]), ("stock", [item for item in normalized_symbols if infer_asset_type(item) != "etf"])):
+            if not group:
+                continue
+            option_name = "fund_spot_function" if asset_type == "etf" else "stock_spot_function"
+            default_name = "fund_etf_spot_em" if asset_type == "etf" else "stock_zh_a_spot_em"
+            function_name = str(self.options.get(option_name) or default_name)
+            tables[asset_type] = getattr(ak, function_name)()
+        fetched_at = datetime.now(timezone.utc)
+        result = {}
+        for symbol in normalized_symbols:
+            asset_type = "etf" if infer_asset_type(symbol) == "etf" else "stock"
+            result[symbol] = parse_quote_table(tables[asset_type], symbol, fetched_at=fetched_at, freshness_seconds=self.freshness_seconds)
+        return result
+
+    def search_instruments(self, query: str, limit: int = 12) -> List[Dict[str, str]]:
+        """Search the public A-share and ETF spot lists by six-digit code or name."""
+        text = str(query).strip().upper()
+        if len(text) < 2:
+            return []
+        return [
+            item for item in self.list_instruments()
+            if text in item["symbol"] or text in item["name"].upper()
+        ][:limit]
+
+    def list_instruments(self) -> List[Dict[str, str]]:
+        """Load a daily-searchable A-share and ETF catalog from public spot tables."""
+        ak = self._akshare()
+        sources = [
+            (
+                "etf",
+                [
+                    str(self.options.get("fund_spot_function") or "fund_etf_spot_em"),
+                    *self._fallback_function_names("fund_spot_fallback_functions", ["fund_etf_spot_ths"]),
+                ],
+            ),
+            (
+                "stock",
+                [
+                    str(self.options.get("stock_spot_function") or "stock_zh_a_spot_em"),
+                    *self._fallback_function_names("stock_spot_fallback_functions", ["stock_zh_a_spot_tx"]),
+                ],
+            ),
+        ]
+        results: List[Dict[str, str]] = []
+        seen: set[str] = set()
+        for asset_type, function_names in sources:
+            records = self._load_catalog_records(ak, function_names)
+            for record in records:
+                code = str(_get(record, "代码", "基金代码", "code", "dm", "symbol", default="")).strip()
+                name = str(_get(record, "名称", "基金名称", "name", default="")).strip()
+                if not code:
+                    continue
+                try:
+                    symbol = validate_hs_symbol(code, asset_type)
+                except UniverseError:
+                    continue
+                if symbol in seen:
+                    continue
+                seen.add(symbol)
+                results.append({"symbol": symbol, "name": name or symbol, "asset_type": asset_type})
+        return sorted(results, key=lambda item: item["symbol"])
+
+    def _load_catalog_records(self, ak: Any, function_names: List[str]) -> List[Dict[str, Any]]:
+        failures: List[str] = []
+        for function_name in dict.fromkeys(function_names):
+            if not hasattr(ak, function_name):
+                failures.append(f"{function_name}: AKShare 中不存在该函数")
+                continue
+            try:
+                records = _records(getattr(ak, function_name)())
+            except Exception as exc:  # noqa: BLE001 - public providers use heterogeneous errors
+                failures.append(f"{function_name}: {exc}")
+                continue
+            if records:
+                return records
+            failures.append(f"{function_name}: 返回空数据")
+        raise AKShareError("证券目录获取失败：" + "；".join(failures))
+
+    def _fallback_function_names(self, option_name: str, defaults: List[str]) -> List[str]:
+        configured = self.options.get(option_name, defaults)
+        if isinstance(configured, str):
+            return [item.strip() for item in configured.split(",") if item.strip()]
+        return [str(item) for item in configured]
 
     def get_bars(self, symbol: str, interval: str = "daily", start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         ak = self._akshare()
@@ -183,15 +265,37 @@ class AKShareAdapter:
         period = PERIODS.get(interval, interval)
         adjust_value = ADJUSTS.get(adjust, adjust)
         if infer_asset_type(normalized) == "etf":
-            function_name = str(self.options.get("fund_history_function") or "fund_etf_hist_em")
+            primary = str(self.options.get("fund_history_function") or "fund_etf_hist_em")
+            fallback_names = self._fallback_function_names("fund_history_fallback_functions", ["fund_etf_hist_sina"])
         else:
-            function_name = str(self.options.get("stock_history_function") or "stock_zh_a_hist")
-        function = getattr(ak, function_name)
-        try:
-            table = function(symbol=code, period=period, start_date=start, end_date=end, adjust=adjust_value)
-        except TypeError:
-            table = function(symbol=code, period=period, start_date=start, end_date=end)
-        return parse_bars_table(table, normalized)
+            primary = str(self.options.get("stock_history_function") or "stock_zh_a_hist")
+            fallback_names = self._fallback_function_names("stock_history_fallback_functions", ["stock_zh_a_hist_tx"])
+        failures: List[str] = []
+        for function_name in dict.fromkeys([primary, *fallback_names]):
+            if not hasattr(ak, function_name):
+                failures.append(f"{function_name}: AKShare 中不存在该函数")
+                continue
+            function = getattr(ak, function_name)
+            try:
+                prefix = "sh" if normalized.endswith(".SH") else "sz"
+                if function_name == "fund_etf_hist_sina":
+                    table = function(symbol=f"{prefix}{code}")
+                elif function_name.endswith("_tx"):
+                    table = function(symbol=f"{prefix}{code}", start_date=start, end_date=end, adjust="")
+                else:
+                    try:
+                        table = function(symbol=code, period=period, start_date=start, end_date=end, adjust=adjust_value)
+                    except TypeError:
+                        table = function(symbol=code, period=period, start_date=start, end_date=end)
+                bars = parse_bars_table(table, normalized)
+                bars = _filter_bars_by_date(bars, start, end)
+            except Exception as exc:  # noqa: BLE001 - public providers raise mixed exceptions
+                failures.append(f"{function_name}: {exc}")
+                continue
+            if bars:
+                return bars
+            failures.append(f"{function_name}: 返回空数据")
+        raise AKShareError(f"AKShare 历史 K 线获取失败：{'；'.join(failures)}")
 
     def get_daily_bars(self, symbol: str, start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         return self.get_bars(symbol, "daily", start, end, adjust)

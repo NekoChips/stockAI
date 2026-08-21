@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -24,16 +26,29 @@ class BenchmarkConfig:
 @dataclass(frozen=True)
 class DataConfig:
     provider: str
+    market_fallback_providers: List[str]
     history_provider: str
+    history_fallback_providers: List[str]
     freshness_seconds: int
     history: Dict[str, object]
     providers: Dict[str, Dict[str, object]]
 
 
 @dataclass(frozen=True)
+class MySQLConnectionConfig:
+    host: str
+    port: int
+    database: str
+    username: str
+    password: str
+
+
+@dataclass(frozen=True)
 class StorageConfig:
     driver: str
     database: str
+    backup_dir: str
+    mysql: Optional[MySQLConnectionConfig] = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +86,7 @@ class MonitorConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
+    environment: str
     timezone: str
     allowed_exchanges: List[str]
     allowed_asset_types: List[str]
@@ -89,7 +105,7 @@ def _decimal(value: object) -> Decimal:
 
 
 def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    raw = _expand_environment(_load_raw_config(Path(path)))
     market = raw["market"]
     data = raw["data"]
     storage = raw["storage"]
@@ -97,14 +113,33 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
     risk = raw["risk"]
     strategy = raw["strategy"]
     monitor = raw.get("monitor", {})
+    mysql_raw = storage.get("mysql")
+    mysql = None
+    if mysql_raw is not None:
+        try:
+            mysql_port = int(mysql_raw["port"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("MySQL 发布配置中的 STOCK_AI_MYSQL_PORT 必须是有效端口号。") from exc
+        mysql = MySQLConnectionConfig(
+            host=str(mysql_raw["host"]),
+            port=mysql_port,
+            database=str(mysql_raw["database"]),
+            username=str(mysql_raw["username"]),
+            password=str(mysql_raw["password"]),
+        )
+    if storage["driver"] == "mysql" and mysql is None:
+        raise ValueError("MySQL 存储配置缺少 mysql 连接信息。")
 
     return AppConfig(
+        environment=str(raw.get("environment", "development")),
         timezone=market["timezone"],
         allowed_exchanges=list(market["allowed_exchanges"]),
         allowed_asset_types=list(market["allowed_asset_types"]),
         data=DataConfig(
             provider=data["provider"],
+            market_fallback_providers=[str(item) for item in data.get("market_fallback_providers", ["akshare"])],
             history_provider=data.get("history_provider", data["provider"]),
+            history_fallback_providers=[str(item) for item in data.get("history_fallback_providers", [])],
             freshness_seconds=int(data["freshness_seconds"]),
             history=dict(data.get("history", {})),
             providers={key: dict(value) for key, value in data.get("providers", {}).items()},
@@ -112,6 +147,8 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
         storage=StorageConfig(
             driver=storage["driver"],
             database=storage["database"],
+            backup_dir=str(storage.get("backup_dir", "data/backups")),
+            mysql=mysql,
         ),
         paper_account=PaperAccountConfig(
             initial_cash=_decimal(account["initial_cash"]),
@@ -155,3 +192,37 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
             settle_on_start=bool(monitor.get("settle_on_start", True)),
         ),
     )
+
+
+def _load_raw_config(path: Path, seen: Optional[set[Path]] = None) -> dict:
+    resolved = path.resolve()
+    seen = seen or set()
+    if resolved in seen:
+        raise ValueError(f"配置文件 extends 存在循环引用：{resolved}")
+    seen.add(resolved)
+    raw = json.loads(resolved.read_text(encoding="utf-8"))
+    parent = raw.pop("extends", None)
+    if not parent:
+        return raw
+    base = _load_raw_config(resolved.parent / str(parent), seen)
+    return _deep_merge(base, raw)
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _expand_environment(value: object) -> object:
+    if isinstance(value, dict):
+        return {key: _expand_environment(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_environment(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    return re.sub(r"\$\{([A-Z0-9_]+)\}", lambda match: os.environ.get(match.group(1), match.group(0)), value)
