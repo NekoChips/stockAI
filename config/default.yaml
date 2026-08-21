@@ -58,15 +58,20 @@
     }
   },
   "storage": {
-    "driver": "sqlite",
-    "database": "data/stock_ai_agent.sqlite3",
-    "backup_dir": "data/backups"
+    "driver": "mock",
+    "database": "",
+    "backup_dir": ""
   },
   "monitor": {
     "poll_seconds": 60,
     "post_close_report_time": "15:05",
     "respect_market_hours": true,
     "settle_on_start": true
+  },
+  "web": {
+    "require_basic_auth": false,
+    "username": "",
+    "password": ""
   },
   "paper_account": {
     "initial_cash": "1000000",
@@ -96,11 +101,7 @@
     "target_weight_levels": ["0", "0.20", "0.40", "0.60"],
     "manual_approval_required": true,
     "weights": {
-      "trend": "0.30",
-      "momentum": "0.25",
-      "volatility": "0.15",
-      "volume": "0.15",
-      "risk_penalty": "0.15",
+      "technical_composite": "0.30",
       "time_series_momentum": "0.20",
       "mean_reversion": "0.15",
       "relative_strength": "0.20",

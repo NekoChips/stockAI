@@ -63,6 +63,22 @@ class RiskTests(unittest.TestCase):
         self.assertFalse(result.decision.approved)
         self.assertIn("可卖数量不足", result.decision.reasons[0])
 
+    def test_buy_respects_combined_portfolio_exposure(self):
+        portfolio = Portfolio(
+            Decimal("400000"),
+            {
+                "588170.SH": Position("588170.SH", 600000, 600000, Decimal("1"), Decimal("1")),
+            },
+        )
+        result = self.engine.evaluate(signal(target=Decimal("0.60"), symbol="588200.SH"), portfolio, quote("588200.SH"))
+
+        self.assertTrue(result.decision.approved)
+        self.assertIsNotNone(result.order)
+        self.assertLessEqual(
+            (portfolio.total_market_value() + result.order.notional) / portfolio.total_asset(),
+            Decimal("0.90"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

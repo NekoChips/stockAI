@@ -35,8 +35,12 @@ class RiskEngine:
         target_weight = min(signal.target_weight, self.config.max_symbol_weight)
         current_weight = portfolio.position_weight(signal.symbol)
         total_asset = portfolio.total_asset()
-        if target_weight > self.config.max_total_exposure:
-            target_weight = self.config.max_total_exposure
+        other_market_value = portfolio.total_market_value() - (
+            portfolio.positions[signal.symbol].market_value if signal.symbol in portfolio.positions else Decimal("0")
+        )
+        remaining_total_weight = max(Decimal("0"), self.config.max_total_exposure - other_market_value / total_asset) if total_asset > 0 else Decimal("0")
+        if target_weight > remaining_total_weight:
+            target_weight = remaining_total_weight
             reasons.append("目标仓位超过总仓位上限，已下调。")
 
         if quote.latest_price <= 0:

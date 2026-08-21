@@ -85,6 +85,13 @@ class MonitorConfig:
 
 
 @dataclass(frozen=True)
+class WebConfig:
+    require_basic_auth: bool
+    username: str
+    password: str
+
+
+@dataclass(frozen=True)
 class AppConfig:
     environment: str
     timezone: str
@@ -98,6 +105,7 @@ class AppConfig:
     risk: RiskConfig
     strategy: StrategyConfig
     monitor: MonitorConfig
+    web: WebConfig
 
 
 def _decimal(value: object) -> Decimal:
@@ -113,6 +121,7 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
     risk = raw["risk"]
     strategy = raw["strategy"]
     monitor = raw.get("monitor", {})
+    web = raw.get("web", {})
     mysql_raw = storage.get("mysql")
     mysql = None
     if mysql_raw is not None:
@@ -190,6 +199,11 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
             post_close_report_time=str(monitor.get("post_close_report_time", "15:05")),
             respect_market_hours=bool(monitor.get("respect_market_hours", True)),
             settle_on_start=bool(monitor.get("settle_on_start", True)),
+        ),
+        web=WebConfig(
+            require_basic_auth=bool(web.get("require_basic_auth", False)),
+            username=str(web.get("username", "")),
+            password=str(web.get("password", "")),
         ),
     )
 

@@ -6,6 +6,8 @@ x-stockai-environment: &stockai-environment
   STOCK_AI_MYSQL_USERNAME: "CHANGE_ME"
   STOCK_AI_MYSQL_PASSWORD: "CHANGE_ME"
   ALPHAFEED_API_KEY: "CHANGE_ME"
+  STOCK_AI_WEB_USERNAME: "CHANGE_ME"
+  STOCK_AI_WEB_PASSWORD: "CHANGE_ME"
 
 x-stockai-service: &stockai-service
   image: ghcr.io/nekochips/stockai:latest

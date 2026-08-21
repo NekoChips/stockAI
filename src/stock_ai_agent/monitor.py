@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as clock_time
 from decimal import Decimal
@@ -26,8 +27,12 @@ from .quant_strategies import (
 from .risk import RiskEngine
 from .reference_data import sync_benchmark_history, sync_instrument_catalog
 from .strategy import StrategyContext, TechnicalCompositeStrategy, aggregate_signals
+from .trading_calendar import AShareTradingCalendar
 from .universe import Universe
 from .watchlist import effective_watchlist
+
+
+logger = logging.getLogger(__name__)
 
 
 class PaperTradingStore(Protocol):
@@ -83,6 +88,7 @@ class RealTimePaperTradingMonitor:
         store: PaperTradingStore,
         quote_provider=None,
         history_provider=None,
+        trading_day_checker: Callable[[date], bool] | None = None,
     ) -> None:
         self.config = config
         self.store = store
@@ -95,6 +101,8 @@ class RealTimePaperTradingMonitor:
         self._quote_prune_attempted_dates: set[date] = set()
         self._trading_data_ready = False
         self._initialization_warnings: list[str] = []
+        calendar = AShareTradingCalendar() if config.environment == "release" else None
+        self._is_trading_day = trading_day_checker or (calendar.is_trading_day if calendar else lambda value: value.weekday() < 5)
 
     def run_iteration(self, now: datetime | None = None, ignore_market_hours: bool = False) -> MonitorIterationResult:
         local_now = self._local_now(now)
@@ -109,7 +117,7 @@ class RealTimePaperTradingMonitor:
             self.store.settle_t_plus_one(trade_date)
             portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
 
-        if self.config.monitor.respect_market_hours and not ignore_market_hours and not is_trading_time(local_now):
+        if self.config.monitor.respect_market_hours and not ignore_market_hours and not is_trading_time(local_now, self._is_trading_day):
             return MonitorIterationResult("skipped", "当前不在 A 股连续竞价交易时段，跳过本轮盯盘。", portfolio, [], [])
 
         universe = Universe.from_config(effective_watchlist(self.config, self.store))
@@ -173,11 +181,14 @@ class RealTimePaperTradingMonitor:
                 continue
             current_weights = {symbol: portfolio.position_weight(symbol) for symbol in portfolio.positions}
             strategy_context = StrategyContext(current_weights)
+            current_value = portfolio.total_asset()
+            snapshots = self.store.load_portfolio_snapshots() if hasattr(self.store, "load_portfolio_snapshots") else []
+            historical_peak = max((value for _, value in snapshots), default=self.config.paper_account.initial_cash)
             quant_context = QuantContext(
                 histories=histories,
                 current_weights=current_weights,
-                peak_values={instrument.symbol: Decimal("1")},
-                current_values={instrument.symbol: Decimal("1")},
+                peak_values={instrument.symbol: max(historical_peak, current_value)},
+                current_values={instrument.symbol: current_value},
             )
             signals = [
                 TechnicalCompositeStrategy().evaluate(features, strategy_context),
@@ -188,7 +199,7 @@ class RealTimePaperTradingMonitor:
                 DrawdownControlStrategy(Decimal(str(self.config.strategy.quant.get("drawdown_stop", "0.08")))).evaluate(instrument.symbol, features, quant_context),
             ]
             aggregate = aggregate_signals(signals, self.config.strategy.weights)
-            daily_trade_count = self.store.count_fills(trade_date) + len(fills)
+            daily_trade_count = self.store.count_fills(trade_date)
             risk_result = risk.evaluate(aggregate, portfolio, quote, daily_trade_count=daily_trade_count)
             decisions.append(risk_result.decision)
             self.store.record_decision(risk_result.decision, trade_date)
@@ -273,51 +284,57 @@ class RealTimePaperTradingMonitor:
         ignore_market_hours: bool = False,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
+        if hasattr(self.store, "acquire_monitor_lock") and not self.store.acquire_monitor_lock():
+            raise RuntimeError("已有 monitor 实例持有 MySQL 运行锁，拒绝启动重复实例。")
         iteration = 0
-        while max_iterations is None or iteration < max_iterations:
-            local_now = self._local_now(now_fn() if now_fn else None)
-            if is_post_close_report_time(local_now, self.config.monitor.post_close_report_time) and local_now.date() not in self._reported_dates:
-                report = self.generate_post_close_report(local_now.date())
-                Thread(
-                    target=self._sync_reference_data_in_background,
-                    args=(local_now.date(), True),
-                    daemon=True,
-                ).start()
-                portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
-                result = MonitorIterationResult("reported", "收盘日报已归档到数据库。", portfolio, [], [], report)
-                self._reported_dates.add(local_now.date())
-            elif not self._trading_data_ready:
-                ready, warnings = self.initialize_trading_data(local_now.date())
-                if not ready:
+        try:
+            while max_iterations is None or iteration < max_iterations:
+                local_now = self._local_now(now_fn() if now_fn else None)
+                if is_post_close_report_time(local_now, self.config.monitor.post_close_report_time, self._is_trading_day) and local_now.date() not in self._reported_dates:
+                    report = self.generate_post_close_report(local_now.date())
+                    Thread(
+                        target=self._sync_reference_data_in_background,
+                        args=(local_now.date(), True),
+                        daemon=True,
+                    ).start()
                     portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
-                    result = MonitorIterationResult(
-                        "initializing",
-                        "交易数据尚未就绪，本轮不执行策略；monitor 将自动重试。",
-                        portfolio,
-                        [],
-                        [],
-                        warnings=warnings,
-                    )
+                    result = MonitorIterationResult("reported", "收盘日报已归档到数据库。", portfolio, [], [], report)
+                    self._reported_dates.add(local_now.date())
+                elif not self._trading_data_ready:
+                    ready, warnings = self.initialize_trading_data(local_now.date())
+                    if not ready:
+                        portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
+                        result = MonitorIterationResult(
+                            "initializing",
+                            "交易数据尚未就绪，本轮不执行策略；monitor 将自动重试。",
+                            portfolio,
+                            [],
+                            [],
+                            warnings=warnings,
+                        )
+                    else:
+                        result = self.run_iteration(local_now, ignore_market_hours=ignore_market_hours)
+                        if warnings:
+                            result = MonitorIterationResult(
+                                "degraded",
+                                result.message + " 启动数据存在非阻断告警。",
+                                result.portfolio,
+                                result.decisions,
+                                result.fills,
+                                result.report,
+                                [*warnings, *result.warnings],
+                            )
                 else:
                     result = self.run_iteration(local_now, ignore_market_hours=ignore_market_hours)
-                    if warnings:
-                        result = MonitorIterationResult(
-                            "degraded",
-                            result.message + " 启动数据存在非阻断告警。",
-                            result.portfolio,
-                            result.decisions,
-                            result.fills,
-                            result.report,
-                            [*warnings, *result.warnings],
-                        )
-            else:
-                result = self.run_iteration(local_now, ignore_market_hours=ignore_market_hours)
-            if on_update:
-                on_update(result)
-            iteration += 1
-            if max_iterations is not None and iteration >= max_iterations:
-                break
-            sleep_fn(float(self.config.monitor.poll_seconds))
+                if on_update:
+                    on_update(result)
+                iteration += 1
+                if max_iterations is not None and iteration >= max_iterations:
+                    break
+                sleep_fn(float(self.config.monitor.poll_seconds))
+        finally:
+            if hasattr(self.store, "release_monitor_lock"):
+                self.store.release_monitor_lock()
 
     def _local_now(self, now: datetime | None = None) -> datetime:
         current = now or datetime.now(self.timezone)
@@ -341,7 +358,7 @@ class RealTimePaperTradingMonitor:
     def _prepare_intraday_quote_store(self, local_now: datetime) -> None:
         """Discard the previous trading day's snapshots before a new A-share session."""
         trade_date = local_now.date()
-        if local_now.weekday() >= 5 or trade_date in self._quote_prune_attempted_dates:
+        if not self._is_trading_day(trade_date) or trade_date in self._quote_prune_attempted_dates:
             return
         self._quote_prune_attempted_dates.add(trade_date)
         if hasattr(self.store, "prune_market_quotes"):
@@ -351,8 +368,8 @@ class RealTimePaperTradingMonitor:
         if hasattr(self.quote_provider, "list_instruments"):
             try:
                 sync_instrument_catalog(self.config, self.store, self.quote_provider, trade_date.isoformat())
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - background refresh must not stop trading
+                logger.warning("证券目录同步失败（%s）：%s", trade_date.isoformat(), exc)
 
     def _sync_reference_data_in_background(
         self,
@@ -366,12 +383,12 @@ class RealTimePaperTradingMonitor:
         if refresh_history:
             try:
                 self._sync_watchlist_history(force=True, as_of=history_as_of)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - retry occurs on the next scheduled refresh
+                logger.warning("观察池历史同步失败（%s）：%s", trade_date.isoformat(), exc)
         try:
             sync_benchmark_history(self.config, self.store, self.history_provider, as_of=history_as_of)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - benchmark failure is non-blocking but observable
+            logger.warning("基准指数历史同步失败（%s）：%s", trade_date.isoformat(), exc)
 
     def _sync_watchlist_history(self, force: bool, as_of: date | None = None) -> list[str]:
         history = self.config.data.history
@@ -429,15 +446,24 @@ class RealTimePaperTradingMonitor:
         ]
 
 
-def is_trading_time(now: datetime) -> bool:
+def is_trading_time(now: datetime, trading_day_checker: Callable[[date], bool] | None = None) -> bool:
     local_time = now.timetz().replace(tzinfo=None)
-    if now.weekday() >= 5:
+    if not (trading_day_checker or (lambda value: value.weekday() < 5))(now.date()):
         return False
     morning = clock_time(9, 30) <= local_time <= clock_time(11, 30)
     afternoon = clock_time(13, 0) <= local_time <= clock_time(15, 0)
     return morning or afternoon
 
 
-def is_post_close_report_time(now: datetime, configured_time: str) -> bool:
+def is_post_close_report_time(
+    now: datetime,
+    configured_time: str,
+    trading_day_checker: Callable[[date], bool] | None = None,
+) -> bool:
     hour, minute = [int(part) for part in configured_time.split(":", 1)]
-    return now.weekday() < 5 and now.timetz().replace(tzinfo=None) >= clock_time(hour, minute)
+    local_time = now.timetz().replace(tzinfo=None)
+    report_time = clock_time(hour, minute)
+    # Only generate the scheduled report in a narrow close window.  Starting a
+    # monitor late at night must not fabricate a second report for that date.
+    close_window_end = clock_time(min(23, hour), min(59, minute + 10))
+    return (trading_day_checker or (lambda value: value.weekday() < 5))(now.date()) and report_time <= local_time <= close_window_end

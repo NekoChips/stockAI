@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import gzip
 import json
+import base64
+import hmac
+from binascii import Error as Base64Error
 from dataclasses import asdict, is_dataclass
 from datetime import date
 from decimal import Decimal
@@ -286,13 +289,40 @@ def remove_dashboard_watchlist_item(config: AppConfig, store, symbol: str) -> di
 
 def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
     class DashboardHandler(BaseHTTPRequestHandler):
+        def _authorized(self) -> bool:
+            if not config.web.require_basic_auth:
+                return True
+            expected_username = config.web.username
+            expected_password = config.web.password
+            if not expected_username or not expected_password or expected_username.startswith("${") or expected_password.startswith("${"):
+                return False
+            header = self.headers.get("Authorization", "")
+            if not header.startswith("Basic "):
+                return False
+            try:
+                username, password = base64.b64decode(header[6:]).decode("utf-8").split(":", 1)
+            except (Base64Error, ValueError, UnicodeDecodeError):
+                return False
+            return hmac.compare_digest(username, expected_username) and hmac.compare_digest(password, expected_password)
+
+        def _require_authorization(self) -> bool:
+            if self._authorized():
+                return True
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="StockAI"')
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return False
+
         def do_GET(self) -> None:
             request = urlparse(self.path)
-            if request.path == "/":
-                _send(self, "text/html; charset=utf-8", render_dashboard_html().encode("utf-8"))
-                return
             if request.path == "/healthz":
                 _send(self, "application/json; charset=utf-8", b'{"status":"ok"}')
+                return
+            if not self._require_authorization():
+                return
+            if request.path == "/":
+                _send(self, "text/html; charset=utf-8", render_dashboard_html().encode("utf-8"))
                 return
             if request.path == "/api/dashboard/overview":
                 payload = build_dashboard_overview_payload(config, store)
@@ -379,6 +409,8 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
             self.send_error(404, "Not Found")
 
         def do_POST(self) -> None:
+            if not self._require_authorization():
+                return
             request = urlparse(self.path)
             if request.path == "/api/backtests/confirm":
                 length = int(self.headers.get("Content-Length", "0") or "0")
@@ -406,6 +438,8 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
             self.send_error(404, "Not Found")
 
         def do_DELETE(self) -> None:
+            if not self._require_authorization():
+                return
             request = urlparse(self.path)
             prefix = "/api/watchlist/"
             if request.path.startswith(prefix):
