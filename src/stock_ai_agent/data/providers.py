@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from threading import Lock
 from typing import Any, Callable, List
 
 from ..config import AppConfig
@@ -15,6 +16,40 @@ class HistoryDataError(RuntimeError):
     """Raised when every configured historical data source fails."""
 
 
+class CircuitBreaker:
+    """Fail fast for a provider during an outage, then allow a later probe."""
+
+    def __init__(self, failure_threshold: int = 3, cooldown_seconds: float = 120.0, monotonic_fn: Callable[[], float] = time.monotonic) -> None:
+        self.failure_threshold = max(1, int(failure_threshold))
+        self.cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self.monotonic_fn = monotonic_fn
+        self._failures = 0
+        self._opened_at: float | None = None
+        self._lock = Lock()
+
+    def allow_request(self) -> bool:
+        now = self.monotonic_fn()
+        with self._lock:
+            if self._opened_at is None:
+                return True
+            if now - self._opened_at >= self.cooldown_seconds:
+                self._opened_at = None
+                self._failures = 0
+                return True
+            return False
+
+    def record_success(self) -> None:
+        with self._lock:
+            self._failures = 0
+            self._opened_at = None
+
+    def record_failure(self, rate_limited: bool = False) -> None:
+        with self._lock:
+            self._failures = self.failure_threshold if rate_limited else self._failures + 1
+            if self._failures >= self.failure_threshold:
+                self._opened_at = self.monotonic_fn()
+
+
 class FallbackHistoryDataProvider:
     def __init__(
         self,
@@ -22,12 +57,15 @@ class FallbackHistoryDataProvider:
         attempts: int = 2,
         backoff_seconds: float = 1.0,
         sleep_fn: Callable[[float], None] = time.sleep,
+        failure_threshold: int = 3,
+        cooldown_seconds: float = 120.0,
     ) -> None:
         self.providers = providers
         self.attempts = max(1, int(attempts))
         self.backoff_seconds = max(0.0, float(backoff_seconds))
         self.sleep_fn = sleep_fn
         self.last_source = ""
+        self._breakers = {name: CircuitBreaker(failure_threshold, cooldown_seconds) for name, _ in providers}
 
     def get_bars(self, symbol: str, interval: str = "daily", start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         return self._call(
@@ -58,6 +96,10 @@ class FallbackHistoryDataProvider:
     ) -> dict[str, List[Bar]]:
         failures: list[str] = []
         for source_name, provider in self.providers:
+            breaker = self._breakers[source_name]
+            if not breaker.allow_request():
+                failures.append(f"{source_name}: 熔断冷却中")
+                continue
             method = getattr(provider, "get_bars_batch", None)
             try:
                 if method is not None:
@@ -69,15 +111,21 @@ class FallbackHistoryDataProvider:
                     }
                 if not result or any(not result.get(symbol) for symbol in symbols):
                     raise HistoryDataError(f"{source_name} 返回不完整 K 线")
+                breaker.record_success()
                 self.last_source = source_name
                 return result
             except Exception as exc:  # noqa: BLE001 - external providers raise mixed exceptions
+                breaker.record_failure(rate_limited=bool(getattr(exc, "rate_limited", False)))
                 failures.append(f"{source_name}: {exc}")
         raise HistoryDataError(f"历史 K 线所有数据源均失败：{'；'.join(failures)}")
 
     def _call(self, method_name: str, **kwargs: object) -> List[Bar]:
         failures: list[str] = []
         for source_name, provider in self.providers:
+            breaker = self._breakers[source_name]
+            if not breaker.allow_request():
+                failures.append(f"{source_name}: 熔断冷却中")
+                continue
             call_kwargs = dict(kwargs)
             method = getattr(provider, method_name, None)
             if method is None and method_name == "get_index_bars":
@@ -98,11 +146,14 @@ class FallbackHistoryDataProvider:
                     bars = method(**call_kwargs)
                     if not bars:
                         raise HistoryDataError(f"{source_name} 返回空 K 线")
+                    breaker.record_success()
                     self.last_source = source_name
                     return bars
                 except Exception as exc:  # noqa: BLE001 - external providers raise mixed exceptions
                     failures.append(f"{source_name} 第 {attempt + 1}/{self.attempts} 次失败：{exc}")
-                    if getattr(exc, "rate_limited", False):
+                    rate_limited = bool(getattr(exc, "rate_limited", False))
+                    breaker.record_failure(rate_limited=rate_limited)
+                    if rate_limited:
                         break
                     if attempt + 1 < self.attempts and self.backoff_seconds > 0:
                         self.sleep_fn(self.backoff_seconds * (2**attempt))
@@ -113,9 +164,10 @@ class FallbackHistoryDataProvider:
 class FallbackMarketDataProvider:
     """Try the primary quote source, then fall back to configured providers."""
 
-    def __init__(self, providers: list[tuple[str, Any]]) -> None:
+    def __init__(self, providers: list[tuple[str, Any]], failure_threshold: int = 3, cooldown_seconds: float = 120.0) -> None:
         self.providers = providers
         self.last_source = ""
+        self._breakers = {name: CircuitBreaker(failure_threshold, cooldown_seconds) for name, _ in providers}
 
     def get_quote(self, symbol: str):
         return self.get_quotes([symbol])[symbol]
@@ -123,6 +175,10 @@ class FallbackMarketDataProvider:
     def get_quotes(self, symbols: list[str]) -> dict[str, Any]:
         failures: list[str] = []
         for source_name, provider in self.providers:
+            breaker = self._breakers[source_name]
+            if not breaker.allow_request():
+                failures.append(f"{source_name}: 熔断冷却中")
+                continue
             try:
                 method = getattr(provider, "get_quotes", None)
                 if method is not None:
@@ -131,25 +187,33 @@ class FallbackMarketDataProvider:
                     quotes = {symbol: provider.get_quote(symbol) for symbol in symbols}
                 if any(symbol not in quotes or not isinstance(quotes[symbol], Quote) for symbol in symbols):
                     raise RuntimeError(f"{source_name} 返回不完整实时行情")
+                breaker.record_success()
                 self.last_source = source_name
                 return quotes
             except Exception as exc:  # noqa: BLE001 - external providers raise mixed exceptions
+                breaker.record_failure(rate_limited=bool(getattr(exc, "rate_limited", False)))
                 failures.append(f"{source_name}: {exc}")
         raise RuntimeError(f"实时行情所有数据源均失败：{'；'.join(failures)}")
 
     def list_instruments(self):
         failures: list[str] = []
         for source_name, provider in self.providers:
+            breaker = self._breakers[source_name]
+            if not breaker.allow_request():
+                failures.append(f"{source_name}: 熔断冷却中")
+                continue
             method = getattr(provider, "list_instruments", None)
             if method is None:
                 continue
             try:
                 items = method()
                 if items:
+                    breaker.record_success()
                     self.last_source = source_name
                     return items
                 failures.append(f"{source_name}: 返回空目录")
             except Exception as exc:  # noqa: BLE001 - external providers raise mixed exceptions
+                breaker.record_failure(rate_limited=bool(getattr(exc, "rate_limited", False)))
                 failures.append(f"{source_name}: {exc}")
         raise RuntimeError(f"证券目录所有数据源均失败：{'；'.join(failures)}")
 
@@ -178,7 +242,9 @@ def create_market_data_provider(config: AppConfig, provider_name: str | None = N
         return _create_provider(config, provider_name)
     names = [config.data.provider, *config.data.market_fallback_providers]
     return FallbackMarketDataProvider(
-        [(name, _create_provider(config, name)) for name in dict.fromkeys(names)]
+        [(name, _create_provider(config, name)) for name in dict.fromkeys(names)],
+        failure_threshold=int(config.data.providers.get(config.data.provider, {}).get("circuit_breaker_failure_threshold", 3)),
+        cooldown_seconds=float(config.data.providers.get(config.data.provider, {}).get("circuit_breaker_cooldown_seconds", 120)),
     )
 
 
@@ -192,4 +258,6 @@ def create_history_data_provider(config: AppConfig, provider_name: str | None = 
         providers,
         attempts=int(history.get("retry_attempts", 2)),
         backoff_seconds=float(history.get("retry_backoff_seconds", 1)),
+        failure_threshold=int(history.get("circuit_breaker_failure_threshold", 3)),
+        cooldown_seconds=float(history.get("circuit_breaker_cooldown_seconds", 120)),
     )

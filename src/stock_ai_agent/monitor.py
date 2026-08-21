@@ -41,6 +41,9 @@ class PaperTradingStore(Protocol):
     def load_bars(self, symbol: str, interval: str = "daily", limit: int | None = None) -> List[Bar]:
         ...
 
+    def load_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None) -> dict[str, List[Bar]]:
+        ...
+
     def load_portfolio(self, initial_cash: Decimal) -> Portfolio:
         ...
 
@@ -69,6 +72,24 @@ class PaperTradingStore(Protocol):
         ...
 
     def load_portfolio_snapshots(self) -> list[tuple[date, Decimal]]:
+        ...
+
+    def count_fills(self, trade_date: date) -> int:
+        ...
+
+    def save_quotes(self, quotes) -> int:
+        ...
+
+    def compact_watch_decisions(self) -> int:
+        ...
+
+    def prune_market_quotes(self, trade_date: date) -> int:
+        ...
+
+    def acquire_monitor_lock(self, name: str = "stockai_monitor") -> bool:
+        ...
+
+    def release_monitor_lock(self, name: str = "stockai_monitor") -> None:
         ...
 
 
@@ -129,13 +150,7 @@ class RealTimePaperTradingMonitor:
         history_limit = int(self.config.data.history.get("monitor_history_limit", 80))
         minimum_history_bars = int(self.config.data.history.get("monitor_minimum_bars", 35))
         symbols = [instrument.symbol for instrument in universe.instruments]
-        if hasattr(self.store, "load_bars_batch"):
-            bars_by_symbol = self.store.load_bars_batch(symbols, interval=interval, limit=history_limit)
-        else:
-            bars_by_symbol = {
-                symbol: self.store.load_bars(symbol, interval=interval, limit=history_limit)
-                for symbol in symbols
-            }
+        bars_by_symbol = self.store.load_bars_batch(symbols, interval=interval, limit=history_limit)
         histories = {symbol: [bar.close_price for bar in bars] for symbol, bars in bars_by_symbol.items()}
         decisions: List[Decision] = []
         fills: List[Fill] = []
@@ -153,8 +168,12 @@ class RealTimePaperTradingMonitor:
                 batch_quotes = fetch_quotes(self.quote_provider, symbols)
             except Exception as exc:  # noqa: BLE001 - fallback provider errors are isolated from the loop
                 warnings.extend([f"{symbol} 实时行情获取失败：{exc}" for symbol in symbols])
-        if batch_quotes and hasattr(self.store, "save_quotes"):
+        if batch_quotes:
             self.store.save_quotes(list(batch_quotes.values()))
+
+        snapshots = self.store.load_portfolio_snapshots()
+        historical_peak = max((value for _, value in snapshots), default=self.config.paper_account.initial_cash)
+        daily_trade_count = self.store.count_fills(trade_date)
 
         for instrument in universe.instruments:
             bars = bars_by_symbol.get(instrument.symbol, [])
@@ -176,8 +195,7 @@ class RealTimePaperTradingMonitor:
                 except Exception as exc:  # noqa: BLE001 - provider errors must not stop the monitor loop
                     warnings.append(f"{instrument.symbol} 实时行情获取失败：{exc}")
                     continue
-                if hasattr(self.store, "save_quotes"):
-                    self.store.save_quotes([quote])
+                self.store.save_quotes([quote])
             if instrument.symbol in portfolio.positions:
                 portfolio.positions[instrument.symbol].last_price = quote.latest_price
             try:
@@ -188,8 +206,6 @@ class RealTimePaperTradingMonitor:
             current_weights = {symbol: portfolio.position_weight(symbol) for symbol in portfolio.positions}
             strategy_context = StrategyContext(current_weights)
             current_value = portfolio.total_asset()
-            snapshots = self.store.load_portfolio_snapshots() if hasattr(self.store, "load_portfolio_snapshots") else []
-            historical_peak = max((value for _, value in snapshots), default=self.config.paper_account.initial_cash)
             quant_context = QuantContext(
                 histories=histories,
                 current_weights=current_weights,
@@ -204,8 +220,7 @@ class RealTimePaperTradingMonitor:
                 VolatilityTargetStrategy(self.config.risk.high_atr_ratio).evaluate(instrument.symbol, features, quant_context),
                 DrawdownControlStrategy(Decimal(str(self.config.strategy.quant.get("drawdown_stop", "0.08")))).evaluate(instrument.symbol, features, quant_context),
             ]
-            aggregate = aggregate_signals(signals, self.config.strategy.weights)
-            daily_trade_count = self.store.count_fills(trade_date)
+            aggregate = aggregate_signals(signals, self.config.strategy.weights, self.config.strategy.aggregator)
             risk_result = risk.evaluate(aggregate, portfolio, quote, daily_trade_count=daily_trade_count)
             decisions.append(risk_result.decision)
             self.store.record_decision(risk_result.decision, trade_date)
@@ -227,6 +242,7 @@ class RealTimePaperTradingMonitor:
                 continue
             fills.append(fill)
             self.store.record_fill(fill, trade_date)
+            daily_trade_count += 1
 
         self.store.save_portfolio(portfolio)
         status = "degraded" if warnings else "traded"
@@ -238,13 +254,12 @@ class RealTimePaperTradingMonitor:
     def generate_post_close_report(self, report_date: date | None = None) -> dict:
         report_date = report_date or datetime.now(self.timezone).date()
         portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
-        snapshots = self.store.load_portfolio_snapshots() if hasattr(self.store, "load_portfolio_snapshots") else []
+        snapshots = self.store.load_portfolio_snapshots()
         previous_total_asset = next(
             (value for snapshot_date, value in reversed(snapshots) if snapshot_date < report_date),
             self.config.paper_account.initial_cash,
         )
-        if hasattr(self.store, "record_portfolio_snapshot"):
-            self.store.record_portfolio_snapshot(report_date, portfolio)
+        self.store.record_portfolio_snapshot(report_date, portfolio)
         decisions = self.store.load_decisions(report_date)
         fills = self.store.load_fills(report_date)
         system_notes = list(self._initialization_warnings)
@@ -286,7 +301,7 @@ class RealTimePaperTradingMonitor:
         ignore_market_hours: bool = False,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
-        if hasattr(self.store, "acquire_monitor_lock") and not self.store.acquire_monitor_lock():
+        if not self.store.acquire_monitor_lock():
             raise RuntimeError("已有 monitor 实例持有 MySQL 运行锁，拒绝启动重复实例。")
         iteration = 0
         try:
@@ -331,8 +346,7 @@ class RealTimePaperTradingMonitor:
                     break
                 sleep_fn(float(self.config.monitor.poll_seconds))
         finally:
-            if hasattr(self.store, "release_monitor_lock"):
-                self.store.release_monitor_lock()
+            self.store.release_monitor_lock()
 
     def _local_now(self, now: datetime | None = None) -> datetime:
         current = now or datetime.now(self.timezone)
@@ -359,8 +373,7 @@ class RealTimePaperTradingMonitor:
         if trade_date in self._decision_compaction_attempted_dates:
             return
         self._decision_compaction_attempted_dates.append(trade_date)
-        if hasattr(self.store, "compact_watch_decisions"):
-            self.store.compact_watch_decisions()
+        self.store.compact_watch_decisions()
 
     def _prepare_intraday_quote_store(self, local_now: datetime) -> None:
         """Discard the previous trading day's snapshots before a new A-share session."""
@@ -368,8 +381,7 @@ class RealTimePaperTradingMonitor:
         if not self._is_trading_day(trade_date) or trade_date in self._quote_prune_attempted_dates:
             return
         self._quote_prune_attempted_dates.append(trade_date)
-        if hasattr(self.store, "prune_market_quotes"):
-            self.store.prune_market_quotes(trade_date)
+        self.store.prune_market_quotes(trade_date)
 
     def _sync_catalog_in_background(self, trade_date: date) -> None:
         if hasattr(self.quote_provider, "list_instruments"):

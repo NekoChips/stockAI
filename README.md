@@ -15,6 +15,8 @@ StockAI 是面向沪深 A 股股票与 ETF 的模拟盘 AI-Agent。它使用公�
 - 发布版使用 MySQL，镜像通过 GitHub Container Registry 发布。
 - 开发版默认使用进程内 Mock 数据存储，不依赖 SQLite，也不会落地交易或行情数据；本地验证通过 Mock 行情和单元测试完成。
 
+Web 层按职责拆分为数据组装、写操作、健康检查、HTTP 路由、静态资源和公共响应工具模块；`stock_ai_agent.web` 保留为兼容导入入口。
+
 ## Docker 镜像
 
 最新镜像：
@@ -30,6 +32,8 @@ ghcr.io/nekochips/stockai:v0.1.1
 ```
 
 `latest` 会随 `release` 分支或 `v*` 标签更新；版本标签用于精确部署和回滚。
+
+当前镜像构建会锁定核心依赖版本：AlphaFeed `0.1.4`、AKShare `1.15.60`、PyMySQL `1.1.1`，并以非 root 用户运行。
 
 ## 部署前准备
 
@@ -107,6 +111,8 @@ Web 服务提供轻量健康检查：
 http://部署机地址:8765/healthz
 ```
 
+`/readyz` 还会检查 MySQL 连通性和最近行情是否新鲜；容器编排使用该地址作为就绪探针。MySQL 尚未完成初始化或行情尚未同步时，`readyz` 返回 `503`，这是保护机制，不代表 Web 进程崩溃。
+
 不要使用 `docker compose down -v`，以免误删其他持久化卷。持仓、决策、成交、K 线和日报归档均保存在 MySQL 中，项目不再生成 Markdown 日报文件。除 `/healthz` 外，发布版 Web 页面和 API 均要求 HTTP Basic Auth。
 
 行情与历史 K 线默认先使用 AlphaFeed，并严格按 A 股 Free 套餐做保守限流：实时快照每次最多 5 个标的、日 K 线每次仅 1 个标的；两类接口分别限制为最多 8 次/60 秒、相邻请求至少 7.5 秒，预留 20% 余量。默认两只观察池 ETF 每轮只发送 1 次快照请求；观察池扩容后会自动分片。策略和 Web 优先读取数据库，K 线首次初始化后只从数据库最新日期起同步缺口，常规日 K 更新在收盘日报归档后后台执行，避免盘中反复拉取整段历史。请只运行一个 `monitor` 服务实例，避免多个实例共用同一 API Key 造成重复调用。
@@ -118,3 +124,35 @@ AlphaFeed 调用失败、返回空数据、SDK 缺失、API Key 缺失或触发�
 ## 数据库配置
 
 生产环境的数据库地址、端口、数据库名、用户名和密码只填写在部署平台的 Compose 配置中，不要提交到 GitHub。修改配置后使用 `--force-recreate` 重新创建容器，使新环境变量生效。
+
+## MySQL 数值字段迁移
+
+本版本为新建 MySQL 数据库使用 `DECIMAL`、`DATE` 和 `DATETIME(6)`，不再把价格、收益和时间戳保存为 `VARCHAR`。已有数据库升级需要人工执行，应用不会自动执行破坏性 DDL。
+
+请在维护窗口按以下顺序操作：
+
+1. 停止 StockAI 容器，保留 MySQL 数据库运行。
+2. 先备份数据库：
+
+   ```bash
+   mysqldump -h <db_ip> -P <db_port> -u <db_user> -p \
+     --single-transaction --routines --events stock_ai > stock_ai_before_numeric_migration.sql
+   ```
+
+3. 确认备份文件可读，再执行仓库中的 `migrations/001_mysql_numeric_datetime.sql`：
+
+   ```bash
+   mysql -h <db_ip> -P <db_port> -u <db_user> -p stock_ai \
+     < migrations/001_mysql_numeric_datetime.sql
+   ```
+
+4. 检查脚本输出中的 `invalid_bars_timestamps`、`invalid_quote_timestamps`、`invalid_fill_timestamps` 均为 `0`，并核对迁移前后的 `bars`、`market_quotes` 行数。
+5. 确认 `SHOW CREATE TABLE` 中价格/收益为 `DECIMAL`、日期为 `DATE`、时间戳为 `DATETIME(6)` 后，再启动新镜像：
+
+   ```bash
+   docker compose up -d --pull always --force-recreate --remove-orphans
+   docker compose ps
+   docker compose logs --tail=100 web monitor
+   ```
+
+迁移脚本不是幂等脚本，只能对同一数据库执行一次。若校验数量不为 0，请停止后续操作，保留备份并先处理异常时间值。
