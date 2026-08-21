@@ -2,7 +2,7 @@ services:
   monitor:
     build:
       context: .
-    image: stockai:release
+    image: ghcr.io/nekochips/stockai:latest
     env_file:
       - docker/.env.release
     command: ["monitor", "--config", "config/release.container.yaml"]
@@ -11,7 +11,7 @@ services:
   web:
     build:
       context: .
-    image: stockai:release
+    image: ghcr.io/nekochips/stockai:latest
     env_file:
       - docker/.env.release
     command: ["web", "--config", "config/release.container.yaml", "--host", "0.0.0.0", "--port", "8765"]
