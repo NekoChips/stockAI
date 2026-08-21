@@ -24,7 +24,7 @@ class PaperBroker:
         if order.direction in {Direction.BUY, Direction.ADD}:
             fill_price = order.requested_price * (Decimal("1") + self.slippage_rate)
             gross = fill_price * Decimal(order.quantity)
-            fee = (gross * self.fee_rate).quantize(Decimal("0.01"))
+            fee = gross * self.fee_rate
             cash_needed = gross + fee
             if cash_needed > self.portfolio.cash:
                 raise PaperBrokerError("模拟账户现金不足，无法成交。")
@@ -42,11 +42,11 @@ class PaperBroker:
                 raise PaperBrokerError("可卖数量不足，无法成交。")
             fill_price = order.requested_price * (Decimal("1") - self.slippage_rate)
             gross = fill_price * Decimal(order.quantity)
-            fee = (gross * self.fee_rate).quantize(Decimal("0.01"))
+            fee = gross * self.fee_rate
             position.quantity -= order.quantity
             position.available_quantity -= order.quantity
             position.last_price = fill_price
-            position.realized_pnl += (gross - fee - position.average_cost * Decimal(order.quantity)).quantize(Decimal("0.01"))
+            position.realized_pnl += gross - fee - position.average_cost * Decimal(order.quantity)
             self.portfolio.cash = (self.portfolio.cash + gross - fee).quantize(Decimal("0.01"))
         else:
             raise PaperBrokerError("持有或观望信号不会生成成交。")
@@ -56,7 +56,7 @@ class PaperBroker:
             direction=order.direction,
             quantity=order.quantity,
             price=fill_price.quantize(Decimal("0.0001")),
-            fee=fee,
+            fee=fee.quantize(Decimal("0.01")),
             slippage=(abs(fill_price - order.requested_price) * Decimal(order.quantity)).quantize(Decimal("0.01")),
             timestamp=datetime.now(timezone.utc),
         )

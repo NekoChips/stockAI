@@ -4,6 +4,7 @@ import gzip
 import json
 import base64
 import hmac
+import re
 from binascii import Error as Base64Error
 from dataclasses import asdict, is_dataclass
 from datetime import date
@@ -28,6 +29,8 @@ from .watchlist import add_watchlist_item, effective_watchlist, remove_watchlist
 
 
 ANALYSIS_START_DATE = date(2026, 1, 1)
+MAX_BODY_SIZE = 10 * 1024 * 1024
+PLACEHOLDER_PATTERN = re.compile(r"^\$\{[A-Z0-9_]+\}$")
 
 
 def build_dashboard_payload(
@@ -294,7 +297,12 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 return True
             expected_username = config.web.username
             expected_password = config.web.password
-            if not expected_username or not expected_password or expected_username.startswith("${") or expected_password.startswith("${"):
+            if (
+                not expected_username
+                or not expected_password
+                or PLACEHOLDER_PATTERN.fullmatch(expected_username)
+                or PLACEHOLDER_PATTERN.fullmatch(expected_password)
+            ):
                 return False
             header = self.headers.get("Authorization", "")
             if not header.startswith("Basic "):
@@ -303,7 +311,29 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 username, password = base64.b64decode(header[6:]).decode("utf-8").split(":", 1)
             except (Base64Error, ValueError, UnicodeDecodeError):
                 return False
-            return hmac.compare_digest(username, expected_username) and hmac.compare_digest(password, expected_password)
+            username_match = hmac.compare_digest(username, expected_username)
+            password_match = hmac.compare_digest(password, expected_password)
+            return username_match and password_match
+
+        def _read_json_body(self) -> dict[str, Any] | None:
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+            except ValueError:
+                self.send_error(400, "Invalid Content-Length")
+                return None
+            if length < 0 or length > MAX_BODY_SIZE:
+                self.send_error(413, "Request Entity Too Large")
+                return None
+            body = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                value = json.loads(body)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self.send_error(400, "Invalid JSON")
+                return None
+            if not isinstance(value, dict):
+                self.send_error(400, "JSON body must be an object")
+                return None
+            return value
 
         def _require_authorization(self) -> bool:
             if self._authorized():
@@ -413,24 +443,24 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 return
             request = urlparse(self.path)
             if request.path == "/api/backtests/confirm":
-                length = int(self.headers.get("Content-Length", "0") or "0")
-                body = self.rfile.read(length).decode("utf-8") if length else "{}"
+                data = self._read_json_body()
+                if data is None:
+                    return
                 try:
-                    data = json.loads(body)
                     ids = [int(item) for item in data.get("ids", [])]
-                except (TypeError, ValueError, json.JSONDecodeError):
+                except (TypeError, ValueError):
                     self.send_error(400, "Bad Request")
                     return
                 payload = json.dumps(confirm_backtest_runs(config, store, ids), ensure_ascii=False).encode("utf-8")
                 _send(self, "application/json; charset=utf-8", payload)
                 return
             if request.path == "/api/watchlist":
-                length = int(self.headers.get("Content-Length", "0") or "0")
-                body = self.rfile.read(length).decode("utf-8") if length else "{}"
+                data = self._read_json_body()
+                if data is None:
+                    return
                 try:
-                    data = json.loads(body)
                     payload = add_dashboard_watchlist_item(config, store, data)
-                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                except (TypeError, ValueError) as exc:
                     _send_error(self, 400, str(exc))
                     return
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))

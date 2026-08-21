@@ -74,6 +74,7 @@ class StrategyConfig:
     manual_approval_required: bool
     weights: Dict[str, Decimal]
     quant: Dict[str, object]
+    technical: Dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -193,6 +194,7 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
             manual_approval_required=bool(strategy["manual_approval_required"]),
             weights={key: _decimal(value) for key, value in strategy["weights"].items()},
             quant=dict(strategy["quant"]),
+            technical=dict(strategy.get("technical", {})),
         ),
         monitor=MonitorConfig(
             poll_seconds=int(monitor.get("poll_seconds", 60)),

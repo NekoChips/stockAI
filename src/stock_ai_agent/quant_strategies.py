@@ -19,7 +19,7 @@ class QuantContext:
 
 
 def _return(history: List[Decimal], lookback: int) -> Decimal | None:
-    if len(history) <= lookback or history[-lookback - 1] == 0:
+    if lookback <= 0 or len(history) <= lookback or history[-lookback - 1] == 0:
         return None
     return history[-1] / history[-lookback - 1] - Decimal("1")
 

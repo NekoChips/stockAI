@@ -108,6 +108,19 @@
       "volatility_target": "0.15",
       "drawdown_control": "0.30"
     },
+    "technical": {
+      "bullish_score": "2",
+      "bearish_score": "-2",
+      "macd_score": "1.5",
+      "rsi_overbought": "75",
+      "rsi_healthy_low": "45",
+      "rsi_healthy_high": "70",
+      "rsi_oversold": "35",
+      "bollinger_high": "2",
+      "bollinger_low": "-1.2",
+      "atr_high": "0.04",
+      "volume_confirm": "1"
+    },
     "quant": {
       "lookback_days": 20,
       "holding_days": 5,

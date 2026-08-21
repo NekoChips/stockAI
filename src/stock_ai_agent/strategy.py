@@ -19,6 +19,20 @@ class TechnicalCompositeStrategy:
     strategy_id = "technical_composite"
     version = "v1"
 
+    def __init__(self, options: Dict[str, object] | None = None) -> None:
+        options = options or {}
+        self.bullish_score = Decimal(str(options.get("bullish_score", "2")))
+        self.bearish_score = Decimal(str(options.get("bearish_score", "-2")))
+        self.macd_score = Decimal(str(options.get("macd_score", "1.5")))
+        self.rsi_overbought = Decimal(str(options.get("rsi_overbought", "75")))
+        self.rsi_healthy_low = Decimal(str(options.get("rsi_healthy_low", "45")))
+        self.rsi_healthy_high = Decimal(str(options.get("rsi_healthy_high", "70")))
+        self.rsi_oversold = Decimal(str(options.get("rsi_oversold", "35")))
+        self.bollinger_high = Decimal(str(options.get("bollinger_high", "2")))
+        self.bollinger_low = Decimal(str(options.get("bollinger_low", "-1.2")))
+        self.atr_high = Decimal(str(options.get("atr_high", "0.04")))
+        self.volume_confirm = Decimal(str(options.get("volume_confirm", "1")))
+
     def evaluate(self, features: FeatureSet, context: StrategyContext | None = None) -> StrategySignal:
         context = context or StrategyContext({})
         current_weight = context.current_weight(features.symbol)
@@ -52,44 +66,44 @@ class TechnicalCompositeStrategy:
         atr_ratio = values.get("atr_ratio", Decimal("1"))
         volume_ratio = values.get("volume_ratio", Decimal("0"))
         if close > sma20 and ema12 > ema26:
-            score += Decimal("2")
+            score += self.bullish_score
             evidence.append("趋势向上：价格位于中期均线上方，EMA12 高于 EMA26。")
         else:
-            score -= Decimal("2")
+            score += self.bearish_score
             objections.append("趋势偏弱：价格或均线结构未确认。")
 
         if macd > 0 and macd_histogram >= 0:
-            score += Decimal("1.5")
+            score += self.macd_score
             evidence.append("动能改善：MACD 位于正区间且柱体未走弱。")
         elif macd_histogram < 0:
             score -= Decimal("1")
             objections.append("动能减弱：MACD 柱体收缩。")
 
-        if Decimal("45") <= rsi_value <= Decimal("70"):
+        if self.rsi_healthy_low <= rsi_value <= self.rsi_healthy_high:
             score += Decimal("1")
             evidence.append("RSI 处于健康区间，未明显超买。")
-        elif rsi_value > Decimal("75"):
+        elif rsi_value > self.rsi_overbought:
             score -= Decimal("1.5")
             objections.append("RSI 偏热，追高风险上升。")
-        elif rsi_value < Decimal("35"):
+        elif rsi_value < self.rsi_oversold:
             score += Decimal("0.5")
             evidence.append("RSI 偏低，存在短线修复可能。")
 
-        if bollinger_z > Decimal("2"):
+        if bollinger_z > self.bollinger_high:
             score -= Decimal("1")
             objections.append("价格触及布林带上沿附近，短线过热。")
-        elif bollinger_z < Decimal("-1.2"):
+        elif bollinger_z < self.bollinger_low:
             score += Decimal("0.5")
             evidence.append("价格低于布林中轨较多，具备均值回归观察价值。")
 
-        if atr_ratio > Decimal("0.04"):
+        if atr_ratio > self.atr_high:
             score -= Decimal("2")
             objections.append("ATR 波动率过高，仓位需要下调。")
         else:
             score += Decimal("0.5")
             evidence.append("ATR 波动率处于可接受范围。")
 
-        if volume_ratio >= Decimal("1"):
+        if volume_ratio >= self.volume_confirm:
             score += Decimal("1")
             evidence.append("成交量高于均值，信号获得量能确认。")
         else:
