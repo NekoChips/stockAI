@@ -102,6 +102,26 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(result.status, "skipped")
         self.assertEqual(result.fills, [])
 
+    def test_monitor_prunes_previous_intraday_quotes_once_before_a_new_trading_day(self):
+        pre_open = datetime(2026, 8, 17, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+        class CountingStore(SQLiteMarketDataStore):
+            def __init__(self, database):
+                super().__init__(database)
+                self.pruned_dates = []
+
+            def prune_market_quotes(self, trade_date):
+                self.pruned_dates.append(trade_date)
+                return super().prune_market_quotes(trade_date)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CountingStore(Path(tmp) / "monitor.sqlite3")
+            monitor = RealTimePaperTradingMonitor(load_config(), store, MockQuoteProvider())
+            monitor.run_iteration(pre_open)
+            monitor.run_iteration(pre_open)
+
+        self.assertEqual(store.pruned_dates, [pre_open.date()])
+
     def test_iteration_reports_missing_history_instead_of_silently_skipping(self):
         config = load_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))

@@ -8,7 +8,7 @@ from threading import Lock
 from typing import Iterator, List
 
 from ..config import MySQLConnectionConfig
-from ..models import Bar, Decision, Direction, Fill, Portfolio, Position, StrategySignal
+from ..models import Bar, Decision, Direction, Fill, Portfolio, Position, Quote, StrategySignal
 
 
 class MySQLMarketDataStore:
@@ -65,6 +65,17 @@ class MySQLMarketDataStore:
                 signal_objections TEXT, signal_explanation TEXT, signal_version VARCHAR(64),
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_decisions_trade_date (trade_date)
             ) CHARACTER SET utf8mb4""",
+            """CREATE TABLE IF NOT EXISTS market_quotes (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date VARCHAR(16) NOT NULL,
+                symbol VARCHAR(32) NOT NULL, name VARCHAR(128) NOT NULL,
+                latest_price VARCHAR(40) NOT NULL, change_percent VARCHAR(40) NOT NULL,
+                previous_close VARCHAR(40) NOT NULL, quoted_at VARCHAR(40) NOT NULL,
+                observed_at VARCHAR(40) NOT NULL,
+                source VARCHAR(64) NOT NULL,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_market_quotes_tick (trade_date, symbol, observed_at),
+                INDEX idx_market_quotes_latest (symbol, trade_date, observed_at)
+            ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS fills (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date VARCHAR(16) NOT NULL, symbol VARCHAR(32) NOT NULL,
                 direction VARCHAR(16) NOT NULL, quantity BIGINT NOT NULL, price VARCHAR(40) NOT NULL,
@@ -109,6 +120,31 @@ class MySQLMarketDataStore:
             with conn.cursor() as cursor:
                 for statement in statements:
                     cursor.execute(statement)
+                self._migrate_market_quotes(cursor)
+
+    @staticmethod
+    def _migrate_market_quotes(cursor) -> None:
+        """Upgrade the former latest-only quote table without discarding its row."""
+        try:
+            cursor.execute("SHOW COLUMNS FROM market_quotes")
+            columns = {row[0] for row in cursor.fetchall()}
+        except AttributeError:  # lightweight unit-test cursor
+            return
+        if {"id", "trade_date", "observed_at"}.issubset(columns):
+            return
+        if "id" not in columns:
+            cursor.execute(
+                "ALTER TABLE market_quotes DROP PRIMARY KEY, "
+                "ADD COLUMN id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST"
+            )
+        if "trade_date" not in columns:
+            cursor.execute("ALTER TABLE market_quotes ADD COLUMN trade_date VARCHAR(16) NOT NULL DEFAULT '' AFTER symbol")
+            cursor.execute("UPDATE market_quotes SET trade_date=LEFT(quoted_at, 10) WHERE trade_date='' ")
+        if "observed_at" not in columns:
+            cursor.execute("ALTER TABLE market_quotes ADD COLUMN observed_at VARCHAR(40) NOT NULL DEFAULT '' AFTER quoted_at")
+            cursor.execute("UPDATE market_quotes SET observed_at=quoted_at WHERE observed_at='' ")
+        cursor.execute("ALTER TABLE market_quotes ADD UNIQUE KEY uq_market_quotes_tick (trade_date, symbol, observed_at)")
+        cursor.execute("ALTER TABLE market_quotes ADD INDEX idx_market_quotes_latest (symbol, trade_date, observed_at)")
 
     def save_bars(self, bars: List[Bar], interval: str = "daily", source: str = "unknown") -> int:
         if not bars:
@@ -128,6 +164,81 @@ class MySQLMarketDataStore:
         else:
             rows = self._fetchall("SELECT * FROM (SELECT symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount FROM bars WHERE symbol=%s AND interval_name=%s ORDER BY timestamp_value DESC LIMIT %s) AS recent ORDER BY timestamp_value ASC", (symbol, interval, limit))
         return [_bar_from_row(row) for row in rows]
+
+    def save_quotes(self, quotes: List[Quote]) -> int:
+        if not quotes:
+            return 0
+        self.initialize()
+        rows = [
+            (
+                _quote_trade_date(quote),
+                quote.symbol,
+                quote.name,
+                str(quote.latest_price),
+                str(quote.change_percent),
+                str(quote.previous_close),
+                quote.timestamp.isoformat(),
+                quote.fetched_at.isoformat(),
+                quote.source,
+            )
+            for quote in quotes
+        ]
+        self._executemany(
+            """INSERT INTO market_quotes (
+                trade_date, symbol, name, latest_price, change_percent, previous_close, quoted_at, observed_at, source
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE name=VALUES(name), latest_price=VALUES(latest_price),
+                change_percent=VALUES(change_percent), previous_close=VALUES(previous_close),
+                quoted_at=VALUES(quoted_at), source=VALUES(source), updated_at=CURRENT_TIMESTAMP""",
+            rows,
+        )
+        return len(rows)
+
+    def load_latest_quotes(self, symbols: list[str] | None = None) -> dict[str, dict]:
+        self.initialize()
+        sql = "SELECT symbol, name, latest_price, change_percent, previous_close, quoted_at, observed_at, source FROM market_quotes"
+        params: tuple = ()
+        if symbols:
+            placeholders = ",".join(["%s"] * len(symbols))
+            sql += f" WHERE symbol IN ({placeholders})"
+            params = tuple(symbols)
+        rows = self._fetchall(sql + " ORDER BY observed_at DESC, id DESC", params)
+        latest: dict[str, dict] = {}
+        for row in rows:
+            if row[0] in latest:
+                continue
+            latest[row[0]] = {
+                "symbol": row[0],
+                "name": row[1],
+                "latest_price": Decimal(row[2]),
+                "change_percent": Decimal(row[3]),
+                "previous_close": Decimal(row[4]),
+                "quoted_at": row[5],
+                "observed_at": row[6],
+                "source": row[7],
+            }
+        return latest
+
+    def load_quote_ticks(self, symbol: str, trade_date: date) -> list[dict]:
+        self.initialize()
+        rows = self._fetchall(
+            "SELECT symbol, name, latest_price, change_percent, previous_close, quoted_at, observed_at, source "
+            "FROM market_quotes WHERE symbol=%s AND trade_date=%s ORDER BY observed_at ASC, id ASC",
+            (symbol, trade_date.isoformat()),
+        )
+        return [_quote_row(row) for row in rows]
+
+    def prune_market_quotes(self, trade_date: date) -> int:
+        self.initialize()
+        rows = self._fetchall(
+            "SELECT symbol, name, latest_price, change_percent, previous_close, quoted_at, observed_at, source "
+            "FROM market_quotes WHERE trade_date<>%s ORDER BY observed_at ASC, id ASC",
+            (trade_date.isoformat(),),
+        )
+        minute_bars = _quote_ticks_to_minute_bars([_quote_row(row) for row in rows])
+        if minute_bars:
+            self.save_bars(minute_bars, interval="minute", source="market_quotes")
+        return self._execute("DELETE FROM market_quotes WHERE trade_date<>%s", (trade_date.isoformat(),))
 
     def load_watchlist_items(self) -> list[dict[str, str]]:
         self.initialize()
@@ -202,8 +313,25 @@ class MySQLMarketDataStore:
 
     def record_decision(self, decision: Decision, trade_date: date) -> None:
         self.initialize()
+        if decision.direction == Direction.WATCH and self._fetchone(
+            "SELECT 1 FROM decisions WHERE trade_date=%s AND symbol=%s AND direction=%s LIMIT 1",
+            (trade_date.isoformat(), decision.symbol, Direction.WATCH.value),
+        ):
+            return
         signal = decision.source_signal
         self._execute("""INSERT INTO decisions (trade_date, symbol, direction, target_weight, approved, reasons, signal_strategy_id, signal_score, signal_confidence, signal_target_weight, signal_evidence, signal_objections, signal_explanation, signal_version) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", (trade_date.isoformat(), decision.symbol, decision.direction.value, str(decision.target_weight), int(decision.approved), _dumps(decision.reasons), signal.strategy_id if signal else None, str(signal.score) if signal else None, str(signal.confidence) if signal else None, str(signal.target_weight) if signal else None, _dumps(signal.evidence) if signal else None, _dumps(signal.objections) if signal else None, signal.explanation if signal else None, signal.version if signal else None))
+
+    def compact_watch_decisions(self) -> int:
+        """Keep one observation decision per symbol and trading day."""
+        self.initialize()
+        return self._execute(
+            """DELETE FROM decisions WHERE direction=%s AND id NOT IN (
+                SELECT id FROM (
+                    SELECT MIN(id) AS id FROM decisions WHERE direction=%s GROUP BY trade_date, symbol
+                ) AS retained
+            )""",
+            (Direction.WATCH.value, Direction.WATCH.value),
+        )
 
     def load_decisions(self, trade_date: date) -> List[Decision]:
         self.initialize()
@@ -358,6 +486,37 @@ class MySQLMarketDataStore:
 
 def _bar_from_row(row: tuple) -> Bar:
     return Bar(row[0], datetime.fromisoformat(row[1]), Decimal(row[2]), Decimal(row[3]), Decimal(row[4]), Decimal(row[5]), Decimal(row[6]), Decimal(row[7]))
+
+
+def _quote_trade_date(quote: Quote) -> str:
+    timestamp = quote.fetched_at
+    if isinstance(timestamp, date) and not isinstance(timestamp, datetime):
+        return timestamp.isoformat()
+    if timestamp.tzinfo is not None:
+        from zoneinfo import ZoneInfo
+        timestamp = timestamp.astimezone(ZoneInfo("Asia/Shanghai"))
+    return timestamp.date().isoformat()
+
+
+def _quote_row(row: tuple) -> dict:
+    return {"symbol": row[0], "name": row[1], "latest_price": Decimal(row[2]), "change_percent": Decimal(row[3]), "previous_close": Decimal(row[4]), "quoted_at": row[5], "observed_at": row[6], "source": row[7]}
+
+
+def _quote_ticks_to_minute_bars(ticks: list[dict]) -> list[Bar]:
+    from zoneinfo import ZoneInfo
+
+    timezone = ZoneInfo("Asia/Shanghai")
+    grouped: dict[tuple[str, datetime], list[dict]] = {}
+    for tick in ticks:
+        timestamp = datetime.fromisoformat(str(tick["observed_at"]))
+        timestamp = timestamp.replace(tzinfo=timezone) if timestamp.tzinfo is None else timestamp.astimezone(timezone)
+        bucket = timestamp.replace(second=0, microsecond=0)
+        grouped.setdefault((str(tick["symbol"]), bucket), []).append(tick)
+    bars: list[Bar] = []
+    for (symbol, timestamp), group in sorted(grouped.items(), key=lambda item: item[0][1]):
+        prices = [Decimal(str(item["latest_price"])) for item in group]
+        bars.append(Bar(symbol, timestamp, prices[0], max(prices), min(prices), prices[-1], Decimal("0"), Decimal("0")))
+    return bars
 
 
 def _fill_from_row(row: tuple) -> Fill:

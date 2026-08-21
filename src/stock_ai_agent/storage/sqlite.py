@@ -6,8 +6,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import List
+from zoneinfo import ZoneInfo
 
-from ..models import Bar, Decision, Direction, Fill, Portfolio, Position, StrategySignal
+from ..models import Bar, Decision, Direction, Fill, Portfolio, Position, Quote, StrategySignal
 
 
 class SQLiteMarketDataStore:
@@ -80,6 +81,13 @@ class SQLiteMarketDataStore:
                 )
                 """
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_decisions_watch_dedup "
+                "ON decisions (direction, trade_date, symbol, id)"
+            )
+            _create_market_quotes_table(conn, create_index=False)
+            _migrate_market_quotes(conn)
+            _create_market_quotes_index(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS fills (
@@ -250,6 +258,105 @@ class SQLiteMarketDataStore:
             for row in rows
         ]
 
+    def save_quotes(self, quotes: List[Quote]) -> int:
+        if not quotes:
+            return 0
+        self.initialize()
+        rows = [
+            (
+                _quote_trade_date(quote),
+                quote.symbol,
+                quote.name,
+                str(quote.latest_price),
+                str(quote.change_percent),
+                str(quote.previous_close),
+                quote.timestamp.isoformat(),
+                quote.fetched_at.isoformat(),
+                quote.source,
+            )
+            for quote in quotes
+        ]
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO market_quotes (
+                    trade_date, symbol, name, latest_price, change_percent, previous_close,
+                    quoted_at, observed_at, source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_date, symbol, observed_at) DO UPDATE SET
+                    name=excluded.name,
+                    latest_price=excluded.latest_price,
+                    change_percent=excluded.change_percent,
+                    previous_close=excluded.previous_close,
+                    quoted_at=excluded.quoted_at,
+                    source=excluded.source,
+                    updated_at=CURRENT_TIMESTAMP
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def load_latest_quotes(self, symbols: list[str] | None = None) -> dict[str, dict]:
+        self.initialize()
+        sql = "SELECT symbol, name, latest_price, change_percent, previous_close, quoted_at, observed_at, source FROM market_quotes"
+        params: list[str] = []
+        if symbols:
+            placeholders = ",".join("?" for _ in symbols)
+            sql += f" WHERE symbol IN ({placeholders})"
+            params = list(symbols)
+        sql += " ORDER BY observed_at DESC, id DESC"
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        latest: dict[str, dict] = {}
+        for row in rows:
+            if row[0] in latest:
+                continue
+            latest[row[0]] = {
+                "symbol": row[0],
+                "name": row[1],
+                "latest_price": Decimal(row[2]),
+                "change_percent": Decimal(row[3]),
+                "previous_close": Decimal(row[4]),
+                "quoted_at": row[5],
+                "observed_at": row[6],
+                "source": row[7],
+            }
+        return latest
+
+    def load_quote_ticks(self, symbol: str, trade_date: date) -> list[dict]:
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT symbol, name, latest_price, change_percent, previous_close, quoted_at, observed_at, source
+                FROM market_quotes
+                WHERE symbol = ? AND trade_date = ?
+                ORDER BY observed_at ASC, id ASC
+                """,
+                (symbol, trade_date.isoformat()),
+            ).fetchall()
+        return [_quote_row(row) for row in rows]
+
+    def prune_market_quotes(self, trade_date: date) -> int:
+        """Archive prior snapshots as minute bars, then retain only the current day."""
+        self.initialize()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT symbol, name, latest_price, change_percent, previous_close, quoted_at, observed_at, source
+                FROM market_quotes
+                WHERE trade_date <> ?
+                ORDER BY observed_at ASC, id ASC
+                """,
+                (trade_date.isoformat(),),
+            ).fetchall()
+        minute_bars = _quote_ticks_to_minute_bars([_quote_row(row) for row in rows])
+        if minute_bars:
+            self.save_bars(minute_bars, interval="minute", source="market_quotes")
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM market_quotes WHERE trade_date <> ?", (trade_date.isoformat(),))
+        return int(cursor.rowcount)
+
     def load_watchlist_items(self) -> list[dict[str, str]]:
         self.initialize()
         with self._connect() as conn:
@@ -406,6 +513,13 @@ class SQLiteMarketDataStore:
         self.initialize()
         signal = decision.source_signal
         with self._connect() as conn:
+            if decision.direction == Direction.WATCH:
+                existing = conn.execute(
+                    "SELECT 1 FROM decisions WHERE trade_date = ? AND symbol = ? AND direction = ? LIMIT 1",
+                    (trade_date.isoformat(), decision.symbol, Direction.WATCH.value),
+                ).fetchone()
+                if existing:
+                    return
             conn.execute(
                 """
                 INSERT INTO decisions (
@@ -432,6 +546,24 @@ class SQLiteMarketDataStore:
                     signal.version if signal else None,
                 ),
             )
+
+    def compact_watch_decisions(self) -> int:
+        """Keep one observation decision per symbol and trading day."""
+        self.initialize()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM decisions
+                WHERE direction = ?
+                  AND id NOT IN (
+                      SELECT MIN(id) FROM decisions
+                      WHERE direction = ?
+                      GROUP BY trade_date, symbol
+                  )
+                """,
+                (Direction.WATCH.value, Direction.WATCH.value),
+            )
+        return int(cursor.rowcount)
 
     def load_decisions(self, trade_date: date) -> List[Decision]:
         self.initialize()
@@ -691,6 +823,112 @@ class SQLiteMarketDataStore:
 
 def _json_dumps(value: list[str]) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def _create_market_quotes_table(
+    conn: sqlite3.Connection, table_name: str = "market_quotes", create_index: bool = True
+) -> None:
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            name TEXT NOT NULL,
+            latest_price TEXT NOT NULL,
+            change_percent TEXT NOT NULL,
+            previous_close TEXT NOT NULL,
+            quoted_at TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(trade_date, symbol, observed_at)
+        )
+        """
+    )
+    if create_index:
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{table_name}_latest "
+            f"ON {table_name} (symbol, trade_date, observed_at DESC)"
+        )
+
+
+def _create_market_quotes_index(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_market_quotes_latest "
+        "ON market_quotes (symbol, trade_date, observed_at DESC)"
+    )
+
+
+def _migrate_market_quotes(conn: sqlite3.Connection) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(market_quotes)").fetchall()}
+    if "id" in columns and "trade_date" in columns and "observed_at" in columns:
+        return
+    conn.execute("DROP TABLE IF EXISTS market_quotes_v2")
+    _create_market_quotes_table(conn, "market_quotes_v2")
+    conn.execute(
+        """
+        INSERT INTO market_quotes_v2 (
+            trade_date, symbol, name, latest_price, change_percent, previous_close,
+            quoted_at, observed_at, source
+        )
+        SELECT substr(quoted_at, 1, 10), symbol, name, latest_price, change_percent,
+               previous_close, quoted_at, quoted_at, source
+        FROM market_quotes
+        """
+    )
+    conn.execute("DROP TABLE market_quotes")
+    conn.execute("ALTER TABLE market_quotes_v2 RENAME TO market_quotes")
+
+
+def _quote_trade_date(quote: Quote) -> str:
+    timestamp = quote.fetched_at
+    if isinstance(timestamp, date) and not isinstance(timestamp, datetime):
+        return timestamp.isoformat()
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.astimezone(ZoneInfo("Asia/Shanghai"))
+    return timestamp.date().isoformat()
+
+
+def _quote_row(row: tuple) -> dict:
+    return {
+        "symbol": row[0],
+        "name": row[1],
+        "latest_price": Decimal(row[2]),
+        "change_percent": Decimal(row[3]),
+        "previous_close": Decimal(row[4]),
+        "quoted_at": row[5],
+        "observed_at": row[6],
+        "source": row[7],
+    }
+
+
+def _quote_ticks_to_minute_bars(ticks: list[dict]) -> list[Bar]:
+    grouped: dict[tuple[str, datetime], list[dict]] = {}
+    for tick in ticks:
+        timestamp = datetime.fromisoformat(str(tick["observed_at"]))
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+        else:
+            timestamp = timestamp.astimezone(ZoneInfo("Asia/Shanghai"))
+        bucket = timestamp.replace(second=0, microsecond=0)
+        grouped.setdefault((str(tick["symbol"]), bucket), []).append(tick)
+    bars: list[Bar] = []
+    for (symbol, timestamp), group in sorted(grouped.items(), key=lambda item: item[0][1]):
+        prices = [Decimal(str(item["latest_price"])) for item in group]
+        bars.append(
+            Bar(
+                symbol=symbol,
+                timestamp=timestamp,
+                open_price=prices[0],
+                high_price=max(prices),
+                low_price=min(prices),
+                close_price=prices[-1],
+                volume=Decimal("0"),
+                amount=Decimal("0"),
+            )
+        )
+    return bars
 
 
 def _json_dumps_obj(value: dict) -> str:
