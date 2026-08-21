@@ -156,11 +156,20 @@ class TechnicalCompositeStrategy:
         return Direction.HOLD
 
 
-def aggregate_signals(signals: Iterable[StrategySignal], weights: Dict[str, Decimal] | None = None) -> StrategySignal:
+def aggregate_signals(
+    signals: Iterable[StrategySignal],
+    weights: Dict[str, Decimal] | None = None,
+    aggregator: Dict[str, object] | None = None,
+) -> StrategySignal:
     signal_list = list(signals)
     if not signal_list:
         raise ValueError("缺少策略信号，无法聚合")
     weights = weights or {}
+    aggregator = aggregator or {}
+    buy_threshold = Decimal(str(aggregator.get("buy_score_threshold", "1.5")))
+    exit_threshold = Decimal(str(aggregator.get("exit_score_threshold", "-1.5")))
+    conflict_max_weight = Decimal(str(aggregator.get("conflict_max_weight", "0.20")))
+    confidence_divisor = Decimal(str(aggregator.get("confidence_divisor", "5")))
     symbol = signal_list[0].symbol
     total_weight = Decimal("0")
     weighted_score = Decimal("0")
@@ -195,13 +204,13 @@ def aggregate_signals(signals: Iterable[StrategySignal], weights: Dict[str, Deci
 
     average_score = weighted_score / total_weight if total_weight else Decimal("0")
     if positive and negative:
-        target_weight = min(target_weight, Decimal("0.20"))
+        target_weight = min(target_weight, conflict_max_weight)
         direction = Direction.HOLD if target_weight > 0 else Direction.WATCH
         explanation = "策略信号存在冲突，聚合器保守处理，降低或维持目标仓位。"
-    elif average_score >= Decimal("1.5"):
+    elif average_score >= buy_threshold:
         direction = Direction.BUY
         explanation = "多策略信号一致偏多，聚合后允许提高目标仓位。"
-    elif average_score <= Decimal("-1.5"):
+    elif average_score <= exit_threshold:
         target_weight = Decimal("0")
         direction = Direction.EXIT
         explanation = "多策略信号一致偏弱，聚合后建议清仓或保持空仓。"
@@ -214,7 +223,11 @@ def aggregate_signals(signals: Iterable[StrategySignal], weights: Dict[str, Deci
         symbol=symbol,
         direction=direction,
         score=average_score,
-        confidence=max(Decimal("0"), min(Decimal("1"), abs(average_score) / Decimal("5"))),
+        confidence=(
+            max(Decimal("0"), min(Decimal("1"), abs(average_score) / confidence_divisor))
+            if confidence_divisor > 0
+            else Decimal("0")
+        ),
         target_weight=target_weight,
         evidence=evidence,
         objections=objections,

@@ -19,7 +19,9 @@
       "monitor_minimum_bars": 35,
       "monitor_history_limit": 80,
       "retry_attempts": 1,
-      "retry_backoff_seconds": 1
+      "retry_backoff_seconds": 1,
+      "circuit_breaker_failure_threshold": 3,
+      "circuit_breaker_cooldown_seconds": 120
     },
     "providers": {
       "alphafeed": {
@@ -30,7 +32,9 @@
         "quote_max_requests_per_minute": 8,
         "kline_max_symbols_per_request": 1,
         "kline_max_requests_per_minute": 8,
-        "history_count": 2000
+        "history_count": 2000,
+        "circuit_breaker_failure_threshold": 3,
+        "circuit_breaker_cooldown_seconds": 120
       },
       "akshare": {
         "stock_spot_function": "stock_zh_a_spot_em",
@@ -71,7 +75,8 @@
   "web": {
     "require_basic_auth": false,
     "username": "",
-    "password": ""
+    "password": "",
+    "analysis_start_date": "2026-01-01"
   },
   "paper_account": {
     "initial_cash": "1000000",
@@ -107,6 +112,12 @@
       "relative_strength": "0.20",
       "volatility_target": "0.15",
       "drawdown_control": "0.30"
+    },
+    "aggregator": {
+      "buy_score_threshold": "1.5",
+      "exit_score_threshold": "-1.5",
+      "conflict_max_weight": "0.20",
+      "confidence_divisor": "5"
     },
     "technical": {
       "bullish_score": "2",

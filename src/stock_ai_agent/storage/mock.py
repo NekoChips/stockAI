@@ -34,6 +34,16 @@ class MockMarketDataStore:
     def initialize(self) -> None:
         return None
 
+    def ping(self) -> None:
+        return None
+
+    def last_quote_age_seconds(self) -> float | None:
+        if not self._quotes:
+            return None
+        latest = max(datetime.fromisoformat(str(item["observed_at"])) for item in self._quotes)
+        now = datetime.now(latest.tzinfo) if latest.tzinfo else datetime.now()
+        return max(0.0, (now - latest).total_seconds())
+
     def acquire_monitor_lock(self, name: str = "stockai_monitor") -> bool:
         return True
 
@@ -47,12 +57,16 @@ class MockMarketDataStore:
             self._bars[(normalized.symbol, interval, normalized.timestamp.isoformat())] = normalized
         return len(bars)
 
-    def load_bars(self, symbol: str, interval: str = "daily", limit: int | None = None) -> list[Bar]:
+    def load_bars(self, symbol: str, interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None) -> list[Bar]:
         rows = sorted((bar for (item_symbol, item_interval, _), bar in self._bars.items() if item_symbol == symbol and item_interval == interval), key=lambda item: item.timestamp)
+        if start is not None:
+            rows = [bar for bar in rows if bar.timestamp.date() >= start]
+        if end is not None:
+            rows = [bar for bar in rows if bar.timestamp.date() <= end]
         return rows[-limit:] if limit is not None else rows
 
-    def load_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None) -> dict[str, list[Bar]]:
-        return {symbol: self.load_bars(symbol, interval=interval, limit=limit) for symbol in symbols}
+    def load_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None) -> dict[str, list[Bar]]:
+        return {symbol: self.load_bars(symbol, interval=interval, limit=limit, start=start, end=end) for symbol in symbols}
 
     def save_quotes(self, quotes: list[Quote]) -> int:
         for quote in quotes:

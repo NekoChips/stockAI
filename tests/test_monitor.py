@@ -89,7 +89,7 @@ class MonitorTests(unittest.TestCase):
             for item in config.universe:
                 store.save_bars(bars(item.symbol), source="mock")
             monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
-            with patch("stock_ai_agent.monitor.aggregate_signals", side_effect=lambda signals, weights: buy_signal(next(iter(signals)).symbol)):
+            with patch("stock_ai_agent.monitor.aggregate_signals", side_effect=lambda signals, weights, aggregator=None: buy_signal(next(iter(signals)).symbol)):
                 result = monitor.run_iteration(trade_now)
             loaded = store.load_portfolio(config.paper_account.initial_cash)
             fills = store.load_fills(trade_now.date())
@@ -182,7 +182,7 @@ class MonitorTests(unittest.TestCase):
             for item in config.universe:
                 store.save_bars(bars(item.symbol), source="mock")
             monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
-            with patch("stock_ai_agent.monitor.aggregate_signals", side_effect=lambda signals, weights: buy_signal(next(iter(signals)).symbol)):
+            with patch("stock_ai_agent.monitor.aggregate_signals", side_effect=lambda signals, weights, aggregator=None: buy_signal(next(iter(signals)).symbol)):
                 monitor.run_iteration(trade_now)
             report = monitor.generate_post_close_report(trade_now.date())
             stored = store.load_daily_report(trade_now.date())
@@ -206,7 +206,7 @@ class MonitorTests(unittest.TestCase):
             monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider(), HistoryProvider())
             with patch("stock_ai_agent.monitor.sync_instrument_catalog", return_value=2), patch(
                 "stock_ai_agent.monitor.sync_benchmark_history", return_value={}
-            ), patch("stock_ai_agent.monitor.aggregate_signals", side_effect=lambda signals, weights: buy_signal(next(iter(signals)).symbol)):
+            ), patch("stock_ai_agent.monitor.aggregate_signals", side_effect=lambda signals, weights, aggregator=None: buy_signal(next(iter(signals)).symbol)):
                 monitor.run_forever(max_iterations=1, on_update=lambda result: setattr(self, "startup_result", result), ignore_market_hours=True, now_fn=lambda: trade_now)
 
             counts = [len(store.load_bars(item.symbol)) for item in config.universe]

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
+import logging
+import os
 import sys
 from dataclasses import dataclass, replace
 from datetime import date
@@ -35,6 +38,32 @@ from .strategy import StrategyContext, TechnicalCompositeStrategy, aggregate_sig
 from .universe import Universe
 from .web import serve_dashboard
 from .watchlist import effective_watchlist
+
+
+logger = logging.getLogger(__name__)
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
+
+def _configure_logging() -> None:
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(JsonFormatter())
+    logging.basicConfig(
+        level=getattr(logging, os.environ.get("STOCK_AI_LOG_LEVEL", "INFO").upper(), logging.INFO),
+        handlers=[handler],
+        force=True,
+    )
 
 
 @dataclass
@@ -93,7 +122,7 @@ def run_once(
             VolatilityTargetStrategy(config.risk.high_atr_ratio).evaluate(instrument.symbol, features, quant_context),
             DrawdownControlStrategy(Decimal(str(config.strategy.quant.get("drawdown_stop", "0.08")))).evaluate(instrument.symbol, features, quant_context),
         ]
-        aggregate = aggregate_signals(signals, config.strategy.weights)
+        aggregate = aggregate_signals(signals, config.strategy.weights, config.strategy.aggregator)
         risk_result = risk.evaluate(aggregate, portfolio, quote, daily_trade_count=len(fills))
         decisions.append(risk_result.decision)
         if risk_result.order:
@@ -133,11 +162,7 @@ def run_once_from_store(
     universe = Universe.from_config(config.universe)
     symbols = [instrument.symbol for instrument in universe.instruments]
     interval = str(config.data.history.get("interval", "daily"))
-    bars_by_symbol = (
-        store.load_bars_batch(symbols, interval=interval, limit=history_limit)
-        if hasattr(store, "load_bars_batch")
-        else {symbol: store.load_bars(symbol, interval=interval, limit=history_limit) for symbol in symbols}
-    )
+    bars_by_symbol = store.load_bars_batch(symbols, interval=interval, limit=history_limit)
     histories = {
         symbol: [bar.close_price for bar in bars]
         for symbol, bars in bars_by_symbol.items()
@@ -183,11 +208,7 @@ def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> o
     universe = Universe.from_config(config.universe)
     symbols = [instrument.symbol for instrument in universe.instruments]
     interval = str(config.data.history.get("interval", "daily"))
-    bars_by_symbol = (
-        store.load_bars_batch(symbols, interval=interval)
-        if hasattr(store, "load_bars_batch")
-        else {symbol: store.load_bars(symbol, interval=interval) for symbol in symbols}
-    )
+    bars_by_symbol = store.load_bars_batch(symbols, interval=interval)
     result = optimize_strategy_parameters(
         bars_by_symbol,
         fee_rate=config.paper_account.fee_rate,
@@ -235,6 +256,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--host", default="127.0.0.1", help="Web 服务监听地址")
     parser.add_argument("--port", type=int, default=8765, help="Web 服务监听端口")
     args = parser.parse_args(argv)
+    _configure_logging()
 
     config = load_config(args.config)
     if args.poll_seconds is not None:
@@ -244,35 +266,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             counts = sync_history(config, store)
         except Exception as exc:
-            print(f"同步历史 K 线失败：{exc}", file=sys.stderr)
+            logger.error("同步历史 K 线失败：%s", exc)
             return 1
         for symbol, count in counts.items():
-            print(f"已同步 {symbol} 历史 K 线 {count} 条。")
+            logger.info("已同步 %s 历史 K 线 %s 条。", symbol, count)
         return 0
     if args.command == "sync-benchmarks":
         try:
             counts = sync_benchmarks(config, store)
         except Exception as exc:
-            print(f"同步大盘指数历史 K 线失败：{exc}", file=sys.stderr)
+            logger.error("同步大盘指数历史 K 线失败：%s", exc)
             return 1
         for symbol, count in counts.items():
-            print(f"已同步 {symbol} 指数历史 K 线 {count} 条。")
+            logger.info("已同步 %s 指数历史 K 线 %s 条。", symbol, count)
         return 0
     if args.command == "sync-instruments":
         try:
             count = sync_instrument_catalog(config, store)
         except Exception as exc:
-            print(f"同步全量证券目录失败：{exc}", file=sys.stderr)
+            logger.error("同步全量证券目录失败：%s", exc)
             return 1
-        print(f"已同步沪深股票/ETF 目录 {count} 条。")
+        logger.info("已同步沪深股票/ETF 目录 %s 条。", count)
         return 0
     if args.command == "run-once":
         try:
             result = run_once_from_store(config, store)
         except Exception as exc:
-            print(f"模拟运行失败：{exc}", file=sys.stderr)
+            logger.error("模拟运行失败：%s", exc)
             return 1
-        print(f"已完成一次临时模拟运行：{result.report['report_date']}（不会覆盖正式日报归档）")
+        logger.info("已完成一次临时模拟运行：%s（不会覆盖正式日报归档）", result.report["report_date"])
         return 0
     if args.command == "monitor":
         monitor = RealTimePaperTradingMonitor(config, store)
@@ -281,41 +303,40 @@ def main(argv: Optional[List[str]] = None) -> int:
             detail = f"；本轮成交 {len(result.fills)} 笔，决策 {len(result.decisions)} 条"
             if result.report:
                 detail = f"；日报归档：{result.report['report_date']}"
-            print(f"{result.status}：{result.message}{detail}")
+            logger.info("%s：%s%s", result.status, result.message, detail)
 
         try:
             monitor.run_forever(args.max_iterations, on_update=print_update, ignore_market_hours=args.ignore_market_hours)
         except KeyboardInterrupt:
-            print("已停止实时盯盘模拟。")
+            logger.info("已停止实时盯盘模拟。")
         except Exception as exc:
-            print(f"实时盯盘模拟失败：{exc}", file=sys.stderr)
+            logger.error("实时盯盘模拟失败：%s", exc, exc_info=True)
             return 1
         return 0
     if args.command == "optimize-strategy":
         try:
             result = optimize_strategy_from_store(config, store)
         except Exception as exc:
-            print(f"自动回测优化失败：{exc}", file=sys.stderr)
+            logger.error("自动回测优化失败：%s", exc, exc_info=True)
             return 1
         best = result.best
-        print("已完成自动回测优化，最佳候选仍需人工确认。")
-        print(f"策略：{best.strategy_id}")
-        print(f"参数：{best.parameters}")
-        print(f"收益率：{best.metrics.total_return:.2%}，最大回撤：{best.metrics.max_drawdown:.2%}，胜率：{best.metrics.win_rate:.2%}")
+        logger.info("已完成自动回测优化，最佳候选仍需人工确认。")
+        logger.info("策略：%s；参数：%s", best.strategy_id, best.parameters)
+        logger.info("收益率：%.2f%%，最大回撤：%.2f%%，胜率：%.2f%%", best.metrics.total_return * 100, best.metrics.max_drawdown * 100, best.metrics.win_rate * 100)
         return 0
     if args.command == "web":
         try:
-            print(f"Web 驾驶舱已启动：http://{args.host}:{args.port}")
+            logger.info("Web 驾驶舱已启动：http://%s:%s", args.host, args.port)
             serve_dashboard(config, store, args.host, args.port)
         except KeyboardInterrupt:
-            print("已停止 Web 驾驶舱。")
+            logger.info("已停止 Web 驾驶舱。")
         except Exception as exc:
-            print(f"启动 Web 驾驶舱失败：{exc}", file=sys.stderr)
+            logger.error("启动 Web 驾驶舱失败：%s", exc, exc_info=True)
             return 1
         return 0
     monitor = RealTimePaperTradingMonitor(config, store)
     report = monitor.generate_post_close_report()
-    print(f"收盘日报已归档到数据库：{report['report_date']}")
+    logger.info("收盘日报已归档到数据库：%s", report["report_date"])
     return 0
 
 
