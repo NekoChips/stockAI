@@ -11,5 +11,10 @@
       "username": "${STOCK_AI_MYSQL_USERNAME}",
       "password": "${STOCK_AI_MYSQL_PASSWORD}"
     }
+  },
+  "web": {
+    "require_basic_auth": true,
+    "username": "${STOCK_AI_WEB_USERNAME}",
+    "password": "${STOCK_AI_WEB_PASSWORD}"
   }
 }

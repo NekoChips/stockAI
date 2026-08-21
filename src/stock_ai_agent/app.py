@@ -14,6 +14,7 @@ from .data.providers import create_history_data_provider, create_market_data_pro
 from .features import build_features
 from .history_sync import missing_history_range
 from .journal import build_daily_report
+from .learning import propose_parameter_changes, summarize_learning
 from .models import Bar, Decision, Fill, Portfolio
 from .monitor import RealTimePaperTradingMonitor
 from .paper_broker import PaperBroker, PaperBrokerError
@@ -28,9 +29,8 @@ from .quant_strategies import (
 from .risk import RiskEngine
 from .reference_data import sync_benchmark_history, sync_instrument_catalog
 from .storage.base import MarketDataStore
-from .storage.backup import backup_sqlite_database, restore_sqlite_database
+from .storage.mock import MockMarketDataStore
 from .storage.mysql import MySQLMarketDataStore
-from .storage.sqlite import SQLiteMarketDataStore
 from .strategy import StrategyContext, TechnicalCompositeStrategy, aggregate_signals
 from .universe import Universe
 from .web import serve_dashboard
@@ -46,8 +46,8 @@ class RunResult:
 
 
 def create_market_data_store(config: AppConfig) -> MarketDataStore:
-    if config.storage.driver == "sqlite":
-        return SQLiteMarketDataStore(config.storage.database)
+    if config.storage.driver == "mock":
+        return MockMarketDataStore()
     if config.storage.driver == "mysql":
         return MySQLMarketDataStore(config.storage.mysql)
     raise ValueError(f"暂不支持的数据存储驱动：{config.storage.driver}")
@@ -78,11 +78,12 @@ def run_once(
         features = build_features(instrument.symbol, bars, quote)
         current_weights = {symbol: portfolio.position_weight(symbol) for symbol in portfolio.positions}
         strategy_context = StrategyContext(current_weights)
+        current_value = portfolio.total_asset()
         quant_context = QuantContext(
             histories=histories,
             current_weights=current_weights,
-            peak_values={instrument.symbol: Decimal("1")},
-            current_values={instrument.symbol: Decimal("1")},
+            peak_values={instrument.symbol: max(config.paper_account.initial_cash, current_value)},
+            current_values={instrument.symbol: current_value},
         )
         signals = [
             TechnicalCompositeStrategy().evaluate(features, strategy_context),
@@ -194,6 +195,19 @@ def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> o
                 _metrics_dict(candidate.metrics),
                 candidate.status,
             )
+        proposals = propose_parameter_changes(result.best.metrics.strategy_contributions, result.best.metrics)
+        store.record_backtest_run(
+            "learning_review",
+            {"based_on": result.best.strategy_id, "parameters": result.best.parameters},
+            {
+                "summary": summarize_learning(result.best.metrics.strategy_contributions, result.best.metrics),
+                "proposals": [
+                    {"strategy_id": item.strategy_id, "suggestion": item.suggestion, "evidence": item.evidence, "status": item.status}
+                    for item in proposals
+                ],
+            },
+            "待人工确认",
+        )
     return result
 
 
@@ -205,8 +219,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="A股沪深模拟盘 AI-Agent")
     parser.add_argument(
         "command",
-        choices=["sync-history", "sync-benchmarks", "sync-instruments", "backup-data", "restore-data", "run-once", "monitor", "post-close", "optimize-strategy", "web"],
-        help="同步行情、备份或恢复数据、运行模拟、实时盯盘、收盘日报、回测优化或启动 Web",
+        choices=["sync-history", "sync-benchmarks", "sync-instruments", "run-once", "monitor", "post-close", "optimize-strategy", "web"],
+        help="同步行情、运行模拟、实时盯盘、收盘日报、回测优化或启动 Web",
     )
     parser.add_argument("--config", default="config/default.yaml", help="配置文件路径")
     parser.add_argument("--poll-seconds", type=int, default=None, help="实时盯盘轮询间隔秒数，默认读取配置")
@@ -214,32 +228,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--ignore-market-hours", action="store_true", help="忽略 A 股交易时段限制，便于本地验证")
     parser.add_argument("--host", default="127.0.0.1", help="Web 服务监听地址")
     parser.add_argument("--port", type=int, default=8765, help="Web 服务监听端口")
-    parser.add_argument("--backup-dir", default=None, help="SQLite 备份目录，默认读取配置")
-    parser.add_argument("--backup-file", default=None, help="要恢复的 SQLite 备份文件路径")
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
     if args.poll_seconds is not None:
         config = replace(config, monitor=replace(config.monitor, poll_seconds=args.poll_seconds))
-    if args.command in {"backup-data", "restore-data"}:
-        if config.storage.driver != "sqlite":
-            print("数据备份与恢复命令当前仅支持 SQLite 开发环境。", file=sys.stderr)
-            return 1
-        backup_dir = args.backup_dir or config.storage.backup_dir
-        try:
-            if args.command == "backup-data":
-                backup = backup_sqlite_database(config.storage.database, backup_dir)
-                print(f"SQLite 数据备份完成：{backup.path}")
-            else:
-                if not args.backup_file:
-                    parser.error("restore-data 必须提供 --backup-file")
-                restored = restore_sqlite_database(config.storage.database, args.backup_file, backup_dir)
-                rollback = f"；恢复前备份：{restored.rollback_backup}" if restored.rollback_backup else ""
-                print(f"SQLite 数据恢复完成：{restored.source_backup}{rollback}")
-        except Exception as exc:
-            print(f"SQLite 数据备份或恢复失败：{exc}", file=sys.stderr)
-            return 1
-        return 0
     store = create_market_data_store(config)
     if args.command == "sync-history":
         try:

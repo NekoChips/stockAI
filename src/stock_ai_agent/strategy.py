@@ -41,22 +41,30 @@ class TechnicalCompositeStrategy:
         evidence: List[str] = []
         objections: List[str] = []
 
-        close = values["close"]
-        if close > values["sma20"] and values["ema12"] > values["ema26"]:
+        close = values.get("close", Decimal("0"))
+        sma20 = values.get("sma20", close)
+        ema12 = values.get("ema12", close)
+        ema26 = values.get("ema26", close)
+        macd = values.get("macd", Decimal("0"))
+        macd_histogram = values.get("macd_histogram", Decimal("0"))
+        rsi_value = values.get("rsi14", Decimal("50"))
+        bollinger_z = values.get("bollinger_z", Decimal("0"))
+        atr_ratio = values.get("atr_ratio", Decimal("1"))
+        volume_ratio = values.get("volume_ratio", Decimal("0"))
+        if close > sma20 and ema12 > ema26:
             score += Decimal("2")
             evidence.append("趋势向上：价格位于中期均线上方，EMA12 高于 EMA26。")
         else:
             score -= Decimal("2")
             objections.append("趋势偏弱：价格或均线结构未确认。")
 
-        if values["macd"] > 0 and values["macd_histogram"] >= 0:
+        if macd > 0 and macd_histogram >= 0:
             score += Decimal("1.5")
             evidence.append("动能改善：MACD 位于正区间且柱体未走弱。")
-        elif values["macd_histogram"] < 0:
+        elif macd_histogram < 0:
             score -= Decimal("1")
             objections.append("动能减弱：MACD 柱体收缩。")
 
-        rsi_value = values["rsi14"]
         if Decimal("45") <= rsi_value <= Decimal("70"):
             score += Decimal("1")
             evidence.append("RSI 处于健康区间，未明显超买。")
@@ -67,21 +75,21 @@ class TechnicalCompositeStrategy:
             score += Decimal("0.5")
             evidence.append("RSI 偏低，存在短线修复可能。")
 
-        if values["bollinger_z"] > Decimal("2"):
+        if bollinger_z > Decimal("2"):
             score -= Decimal("1")
             objections.append("价格触及布林带上沿附近，短线过热。")
-        elif values["bollinger_z"] < Decimal("-1.2"):
+        elif bollinger_z < Decimal("-1.2"):
             score += Decimal("0.5")
             evidence.append("价格低于布林中轨较多，具备均值回归观察价值。")
 
-        if values["atr_ratio"] > Decimal("0.04"):
+        if atr_ratio > Decimal("0.04"):
             score -= Decimal("2")
             objections.append("ATR 波动率过高，仓位需要下调。")
         else:
             score += Decimal("0.5")
             evidence.append("ATR 波动率处于可接受范围。")
 
-        if values["volume_ratio"] >= Decimal("1"):
+        if volume_ratio >= Decimal("1"):
             score += Decimal("1")
             evidence.append("成交量高于均值，信号获得量能确认。")
         else:
@@ -119,9 +127,9 @@ class TechnicalCompositeStrategy:
         return Decimal("0")
 
     def _direction(self, current_weight: Decimal, target_weight: Decimal, score: Decimal, values: Dict[str, Decimal]) -> Direction:
-        if values["close"] < values["sma20"] and values["macd_histogram"] < 0:
+        if values.get("close", Decimal("0")) < values.get("sma20", Decimal("0")) and values.get("macd_histogram", Decimal("0")) < 0:
             return Direction.EXIT if current_weight > 0 else Direction.WATCH
-        if values["rsi14"] > Decimal("75") or (values["bollinger_z"] > Decimal("2") and values["macd_histogram"] < 0):
+        if values.get("rsi14", Decimal("50")) > Decimal("75") or (values.get("bollinger_z", Decimal("0")) > Decimal("2") and values.get("macd_histogram", Decimal("0")) < 0):
             return Direction.REDUCE if current_weight > 0 else Direction.WATCH
         if target_weight == 0:
             return Direction.HOLD if current_weight > 0 else Direction.WATCH
@@ -143,6 +151,7 @@ def aggregate_signals(signals: Iterable[StrategySignal], weights: Dict[str, Deci
     total_weight = Decimal("0")
     weighted_score = Decimal("0")
     target_weight = Decimal("0")
+    risk_caps: List[Decimal] = []
     evidence: List[str] = []
     objections: List[str] = []
     positive = 0
@@ -158,20 +167,27 @@ def aggregate_signals(signals: Iterable[StrategySignal], weights: Dict[str, Deci
             negative += 1
         evidence.extend([f"{signal.strategy_id}: {item}" for item in signal.evidence])
         objections.extend([f"{signal.strategy_id}: {item}" for item in signal.objections])
-        if signal.target_weight > target_weight and signal.score > 0:
+        is_risk_control = signal.strategy_id in {"volatility_target", "drawdown_control"}
+        if not is_risk_control and signal.target_weight > target_weight and signal.score > 0:
             target_weight = signal.target_weight
-        if signal.strategy_id in {"volatility_target", "drawdown_control"} and signal.target_weight < target_weight:
-            target_weight = signal.target_weight
+        if is_risk_control and signal.direction in {Direction.REDUCE, Direction.EXIT}:
+            risk_caps.append(signal.target_weight)
+
+    # Apply all active risk caps after the directional vote.  This makes the
+    # result independent of strategy ordering and prevents neutral risk checks
+    # from clamping an otherwise valid entry signal.
+    if risk_caps:
+        target_weight = min([target_weight, *risk_caps])
 
     average_score = weighted_score / total_weight if total_weight else Decimal("0")
     if positive and negative:
         target_weight = min(target_weight, Decimal("0.20"))
         direction = Direction.HOLD if target_weight > 0 else Direction.WATCH
         explanation = "策略信号存在冲突，聚合器保守处理，降低或维持目标仓位。"
-    elif average_score >= Decimal("2"):
+    elif average_score >= Decimal("1.5"):
         direction = Direction.BUY
         explanation = "多策略信号一致偏多，聚合后允许提高目标仓位。"
-    elif average_score <= Decimal("-2"):
+    elif average_score <= Decimal("-1.5"):
         target_weight = Decimal("0")
         direction = Direction.EXIT
         explanation = "多策略信号一致偏弱，聚合后建议清仓或保持空仓。"

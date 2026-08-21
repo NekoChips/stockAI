@@ -8,7 +8,7 @@ from pathlib import Path
 
 from stock_ai_agent.config import load_config
 from stock_ai_agent.models import Bar, Direction, Fill, Portfolio, Position, Quote
-from stock_ai_agent.storage.sqlite import SQLiteMarketDataStore
+from stock_ai_agent.storage.mock import MockMarketDataStore as SQLiteMarketDataStore
 from stock_ai_agent.web import (
     add_dashboard_watchlist_item,
     build_dashboard_backtests_payload,

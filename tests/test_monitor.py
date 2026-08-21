@@ -7,9 +7,10 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from stock_ai_agent.config import load_config
-from stock_ai_agent.models import Bar, Direction, Quote, StrategySignal
+from stock_ai_agent.models import Bar, Direction, FeatureSet, Quote, StrategySignal
+from stock_ai_agent.storage.mock import MockMarketDataStore
 from stock_ai_agent.monitor import RealTimePaperTradingMonitor, is_post_close_report_time, is_trading_time
-from stock_ai_agent.storage.sqlite import SQLiteMarketDataStore
+from stock_ai_agent.storage.mock import MockMarketDataStore as SQLiteMarketDataStore
 
 
 class MockQuoteProvider:
@@ -73,6 +74,13 @@ class MonitorTests(unittest.TestCase):
         self.assertFalse(is_trading_time(datetime(2026, 8, 17, 12, 0, tzinfo=tz)))
         self.assertTrue(is_post_close_report_time(datetime(2026, 8, 17, 15, 5, tzinfo=tz), "15:05"))
 
+    def test_market_holidays_are_not_treated_as_trading_days(self):
+        tz = ZoneInfo("Asia/Shanghai")
+        holiday = datetime(2026, 10, 1, 10, 0, tzinfo=tz)
+
+        self.assertFalse(is_trading_time(holiday, lambda value: False))
+        self.assertFalse(is_post_close_report_time(holiday.replace(hour=15, minute=5), "15:05", lambda value: False))
+
     def test_iteration_executes_and_persists_paper_fill(self):
         config = load_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
@@ -90,6 +98,23 @@ class MonitorTests(unittest.TestCase):
         self.assertGreaterEqual(len(result.decisions), 1)
         self.assertGreaterEqual(len(fills), 1)
         self.assertLess(loaded.cash, config.paper_account.initial_cash)
+
+    def test_bullish_real_strategy_pipeline_opens_a_position_from_cash(self):
+        config = load_config()
+        trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        store = MockMarketDataStore()
+        for item in config.universe:
+            store.save_bars(bars(item.symbol), source="mock")
+        bullish = {
+            "close": Decimal("1.10"), "sma20": Decimal("1.00"), "ema12": Decimal("1.08"), "ema26": Decimal("1.02"),
+            "macd": Decimal("0.02"), "macd_histogram": Decimal("0.01"), "rsi14": Decimal("60"),
+            "bollinger_z": Decimal("0.5"), "atr_ratio": Decimal("0.02"), "volume_ratio": Decimal("1.5"),
+        }
+        with patch("stock_ai_agent.monitor.build_features", side_effect=lambda symbol, *_: FeatureSet(symbol, trade_now, bullish)):
+            result = RealTimePaperTradingMonitor(config, store, MockQuoteProvider()).run_iteration(trade_now)
+
+        self.assertGreaterEqual(len(result.fills), 1)
+        self.assertTrue(any(decision.direction in {Direction.BUY, Direction.ADD} for decision in result.decisions))
 
     def test_iteration_skips_outside_market_hours(self):
         config = load_config()

@@ -13,6 +13,7 @@ StockAI 是面向沪深 A 股股票与 ETF 的模拟盘 AI-Agent。它使用公�
 - Web 看板支持观察池搜索、添加/删除标的、实时价格与当日涨跌幅展示，以及回测候选的人工确认；重复观望信号会自动合并，避免轨道和数据库积压。
 - 可从实时持仓或观察池进入标的详情，查看分时、五日、1/5/15/30/60 分钟 K、日 K、周 K、月 K；模拟买入、加减仓和清仓会标记在对应图表，并可悬浮查看成交摘要。
 - 发布版使用 MySQL，镜像通过 GitHub Container Registry 发布。
+- 开发版默认使用进程内 Mock 数据存储，不依赖 SQLite，也不会落地交易或行情数据；本地验证通过 Mock 行情和单元测试完成。
 
 ## Docker 镜像
 
@@ -46,7 +47,7 @@ ghcr.io/nekochips/stockai:v0.1.1
 
 1. 项目名称填写 `stockai`，选择一个持久化的项目目录。
 2. 将 [docker-compose.yml](./docker-compose.yml) 的内容粘贴到 Compose 配置中。
-3. 将所有 `CHANGE_ME` 替换为实际 MySQL 配置和 `ALPHAFEED_API_KEY`；如数据库端口不是 `3306`，同步修改 `STOCK_AI_MYSQL_PORT`。
+3. 将所有 `CHANGE_ME` 替换为实际 MySQL 配置、`ALPHAFEED_API_KEY`，以及 Web Basic Auth 的账号密码；如数据库端口不是 `3306`，同步修改 `STOCK_AI_MYSQL_PORT`。
 4. 如果宿主机 `8765` 端口已占用，将映射左侧端口改成其他端口，例如 `8876:8765`。
 5. 点击“立即部署”。
 
@@ -106,7 +107,7 @@ Web 服务提供轻量健康检查：
 http://部署机地址:8765/healthz
 ```
 
-不要使用 `docker compose down -v`，以免误删其他持久化卷。持仓、决策、成交、K 线和日报归档均保存在 MySQL 中，项目不再生成 Markdown 日报文件。
+不要使用 `docker compose down -v`，以免误删其他持久化卷。持仓、决策、成交、K 线和日报归档均保存在 MySQL 中，项目不再生成 Markdown 日报文件。除 `/healthz` 外，发布版 Web 页面和 API 均要求 HTTP Basic Auth。
 
 行情与历史 K 线默认先使用 AlphaFeed，并严格按 A 股 Free 套餐做保守限流：实时快照每次最多 5 个标的、日 K 线每次仅 1 个标的；两类接口分别限制为最多 8 次/60 秒、相邻请求至少 7.5 秒，预留 20% 余量。默认两只观察池 ETF 每轮只发送 1 次快照请求；观察池扩容后会自动分片。策略和 Web 优先读取数据库，K 线首次初始化后只从数据库最新日期起同步缺口，常规日 K 更新在收盘日报归档后后台执行，避免盘中反复拉取整段历史。请只运行一个 `monitor` 服务实例，避免多个实例共用同一 API Key 造成重复调用。
 

@@ -28,6 +28,7 @@ class MySQLMarketDataStore:
         self.password = connection.password
         self._initialized = False
         self._initialize_lock = Lock()
+        self._monitor_lock_connection = None
 
     def initialize(self) -> None:
         if self._initialized:
@@ -37,6 +38,38 @@ class MySQLMarketDataStore:
                 return
             self._initialize_schema()
             self._initialized = True
+
+    def acquire_monitor_lock(self, name: str = "stockai_monitor") -> bool:
+        """Acquire a MySQL advisory lock for the lifetime of one monitor process."""
+        self.initialize()
+        if self._monitor_lock_connection is not None:
+            return True
+        import pymysql
+
+        connection = pymysql.connect(host=self.host, port=self.port, user=self.username, password=self.password, database=self.database, charset="utf8mb4", autocommit=True)
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT GET_LOCK(%s, 0)", (name,))
+                row = cursor.fetchone()
+            if not row or int(row[0]) != 1:
+                connection.close()
+                return False
+        except Exception:
+            connection.close()
+            raise
+        self._monitor_lock_connection = connection
+        return True
+
+    def release_monitor_lock(self, name: str = "stockai_monitor") -> None:
+        connection = self._monitor_lock_connection
+        self._monitor_lock_connection = None
+        if connection is None:
+            return
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT RELEASE_LOCK(%s)", (name,))
+        finally:
+            connection.close()
 
     def _initialize_schema(self) -> None:
         statements = [
