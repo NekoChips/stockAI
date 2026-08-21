@@ -33,7 +33,7 @@ ghcr.io/nekochips/stockai:v0.1.1
 
 `latest` 会随 `release` 分支或 `v*` 标签更新；版本标签用于精确部署和回滚。
 
-当前镜像构建会锁定核心依赖版本：AlphaFeed `0.1.4`、AKShare `1.15.60`、PyMySQL `1.1.1`，并以非 root 用户运行。
+当前镜像构建会锁定核心依赖版本：AlphaFeed `0.1.4`、AKShare `1.18.94`、PyMySQL `1.1.1`，并以非 root 用户运行。
 
 ## 部署前准备
 
