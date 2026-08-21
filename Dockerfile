@@ -14,9 +14,9 @@ RUN apt-get update \
 
 ARG PIP_INDEX_URL
 RUN if [ -n "$PIP_INDEX_URL" ]; then \
-        python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" "akshare>=1.15" "PyMySQL>=1.1"; \
+        python -m pip install --no-cache-dir --index-url "$PIP_INDEX_URL" "alphafeed>=0.1.4" "akshare>=1.15" "PyMySQL>=1.1"; \
     else \
-        python -m pip install --no-cache-dir "akshare>=1.15" "PyMySQL>=1.1"; \
+        python -m pip install --no-cache-dir "alphafeed>=0.1.4" "akshare>=1.15" "PyMySQL>=1.1"; \
     fi
 
 COPY src ./src

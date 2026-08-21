@@ -41,6 +41,7 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("image: ghcr.io/nekochips/stockai:latest", compose)
         self.assertIn('STOCK_AI_MYSQL_HOST: "CHANGE_ME"', compose)
         self.assertIn('STOCK_AI_MYSQL_PASSWORD: "CHANGE_ME"', compose)
+        self.assertIn('ALPHAFEED_API_KEY: "CHANGE_ME"', compose)
         self.assertNotIn("./reports:/app/reports", compose)
         self.assertIn("pull_policy: always", compose)
         self.assertNotIn("bootstrap:", compose)
