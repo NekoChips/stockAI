@@ -26,7 +26,10 @@ MARKET_TIMEZONE = ZoneInfo("Asia/Shanghai")
 PERIODS = {"daily": "1d", "weekly": "1w", "monthly": "1M"}
 ADJUSTS = {"none": "none", "qfq": "forward", "hfq": "backward"}
 _GLOBAL_RATE_LOCK = Lock()
-_GLOBAL_RATE_STATE: dict[str, float] = {}
+_GLOBAL_RATE_STATE: dict[str, list[float]] = {}
+RATE_LIMIT_WINDOW_SECONDS = 60.0
+SAFE_MAX_REQUESTS_PER_MINUTE = 8
+MAX_QUOTE_SYMBOLS_PER_REQUEST = 5
 
 
 def _decimal(value: Any) -> Decimal:
@@ -186,6 +189,10 @@ class AlphaFeedAdapter:
         min_request_interval_seconds: float | None = None,
         quote_cache_seconds: float | None = None,
         history_count: int | None = None,
+        quote_max_symbols_per_request: int | None = None,
+        quote_max_requests_per_minute: int | None = None,
+        kline_max_symbols_per_request: int | None = None,
+        kline_max_requests_per_minute: int | None = None,
         monotonic_fn: Callable[[], float] = time.monotonic,
         sleep_fn: Callable[[float], None] = time.sleep,
         now_fn: Callable[[], datetime] | None = None,
@@ -195,20 +202,52 @@ class AlphaFeedAdapter:
         self.client = client
         self.api_key = api_key if api_key is not None else str(self.options.get("api_key") or os.environ.get(str(self.options.get("api_key_env") or "ALPHAFEED_API_KEY"), ""))
         self.sdk_importer = sdk_importer
-        self.min_request_interval_seconds = float(
-            min_request_interval_seconds
-            if min_request_interval_seconds is not None
-            else self.options.get("min_request_interval_seconds", 3)
-        )
         self.quote_cache_seconds = max(
             0.0,
             float(quote_cache_seconds if quote_cache_seconds is not None else self.options.get("quote_cache_seconds", 3)),
         )
         self.history_count = int(history_count if history_count is not None else self.options.get("history_count", 2000))
+        self.quote_max_symbols_per_request = min(
+            MAX_QUOTE_SYMBOLS_PER_REQUEST,
+            max(
+                1,
+                int(
+                    quote_max_symbols_per_request
+                    if quote_max_symbols_per_request is not None
+                    else self.options.get("quote_max_symbols_per_request", 5)
+                ),
+            ),
+        )
+        self.quote_max_requests_per_minute = min(
+            SAFE_MAX_REQUESTS_PER_MINUTE,
+            max(
+                1,
+                int(
+                    quote_max_requests_per_minute
+                    if quote_max_requests_per_minute is not None
+                    else self.options.get("quote_max_requests_per_minute", 8)
+                ),
+            ),
+        )
+        self.kline_max_symbols_per_request = 1
+        self.kline_max_requests_per_minute = min(
+            SAFE_MAX_REQUESTS_PER_MINUTE,
+            max(
+                1,
+                int(
+                    kline_max_requests_per_minute
+                    if kline_max_requests_per_minute is not None
+                    else self.options.get("kline_max_requests_per_minute", 8)
+                ),
+            ),
+        )
         self.monotonic_fn = monotonic_fn
         self.sleep_fn = sleep_fn
         self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))
-        self._last_request_at: float | None = None
+        self.min_request_interval_seconds = max(
+            0.0,
+            float(min_request_interval_seconds if min_request_interval_seconds is not None else self.options.get("min_request_interval_seconds", 0)),
+        )
         self._quote_cache: dict[str, tuple[float, Quote]] = {}
         self._rate_limit_key = self.api_key or f"client:{id(client)}"
         self.last_source = ""
@@ -232,11 +271,18 @@ class AlphaFeedAdapter:
         if not missing:
             return cached
         client = self._client()
-        self._throttle()
-        fetched_at = self.now_fn()
         try:
-            table = client.quotes.get(symbols=missing, to_dataframe=True)
-            quotes = {symbol: _frame_quote(table, symbol, fetched_at, self.freshness_seconds) for symbol in missing}
+            quotes: Dict[str, Quote] = {}
+            for batch in _chunks(missing, self.quote_max_symbols_per_request):
+                self._throttle("quote", self.quote_max_requests_per_minute)
+                fetched_at = self.now_fn()
+                table = client.quotes.get(symbols=batch, to_dataframe=True)
+                quotes.update(
+                    {
+                        symbol: _frame_quote(table, symbol, fetched_at, self.freshness_seconds)
+                        for symbol in batch
+                    }
+                )
         except Exception as exc:  # noqa: BLE001 - SDK and provider errors vary by plan/network
             if _is_rate_limit_error(exc):
                 raise AlphaFeedRateLimitError(f"AlphaFeed 实时行情触发调用频率限制：{exc}") from exc
@@ -255,24 +301,26 @@ class AlphaFeedAdapter:
             return {}
         period = PERIODS.get(interval, interval)
         adjustment = ADJUSTS.get(adjust, adjust)
+        if self.kline_max_symbols_per_request != 1:
+            raise AlphaFeedError("A 股日 K 线套餐要求每次请求仅包含 1 个标的")
         client = self._client()
-        self._throttle()
         try:
-            frames = client.klines.batch(
-                normalized,
-                period=period,
-                count=self.history_count,
-                start_time=_date_timestamp(start),
-                end_time=_date_timestamp(end, end_of_day=True),
-                adjust=adjustment,
-                to_dataframe=True,
-            )
-            if not isinstance(frames, dict):
-                raise AlphaFeedError("AlphaFeed 批量 K 线返回格式不是字典")
-            result = {symbol: _frame_bars(frames[symbol], symbol, start, end) for symbol in normalized if symbol in frames}
-            if any(not result.get(symbol) for symbol in normalized):
-                missing = [symbol for symbol in normalized if not result.get(symbol)]
-                raise AlphaFeedError(f"AlphaFeed 批量 K 线缺少标的：{','.join(missing)}")
+            result: Dict[str, List[Bar]] = {}
+            for symbol in normalized:
+                self._throttle("daily_kline", self.kline_max_requests_per_minute)
+                table = client.klines.get(
+                    symbol,
+                    period=period,
+                    count=self.history_count,
+                    start_time=_date_timestamp(start),
+                    end_time=_date_timestamp(end, end_of_day=True),
+                    adjust=adjustment,
+                    to_dataframe=True,
+                )
+                bars = _frame_bars(table, symbol, start, end)
+                if not bars:
+                    raise AlphaFeedError(f"AlphaFeed 日 K 线缺少标的：{symbol}")
+                result[symbol] = bars
         except Exception as exc:  # noqa: BLE001 - SDK and provider errors vary by plan/network
             if isinstance(exc, AlphaFeedError):
                 raise
@@ -286,16 +334,29 @@ class AlphaFeedAdapter:
         del akshare_symbol
         return self.get_bars(symbol, "daily", start, end, "none")
 
-    def _throttle(self) -> None:
-        now = self.monotonic_fn()
+    def _throttle(self, endpoint: str, max_requests_per_minute: int) -> None:
+        interval = max(self.min_request_interval_seconds, RATE_LIMIT_WINDOW_SECONDS / max_requests_per_minute)
+        key = f"{self._rate_limit_key}:{endpoint}"
         with _GLOBAL_RATE_LOCK:
-            last_request_at = _GLOBAL_RATE_STATE.get(self._rate_limit_key)
-            wait = 0.0 if last_request_at is None else self.min_request_interval_seconds - (now - last_request_at)
+            now = self.monotonic_fn()
+            timestamps = [
+                timestamp
+                for timestamp in _GLOBAL_RATE_STATE.get(key, [])
+                if now - timestamp < RATE_LIMIT_WINDOW_SECONDS
+            ]
+            scheduled_at = max(now, timestamps[-1] + interval) if timestamps else now
+            if len(timestamps) >= max_requests_per_minute:
+                scheduled_at = max(scheduled_at, timestamps[0] + RATE_LIMIT_WINDOW_SECONDS)
+            wait = scheduled_at - now
             if wait > 0:
                 self.sleep_fn(wait)
-                now += wait
-            _GLOBAL_RATE_STATE[self._rate_limit_key] = now
-            self._last_request_at = now
+            timestamps = [
+                timestamp
+                for timestamp in timestamps
+                if scheduled_at - timestamp < RATE_LIMIT_WINDOW_SECONDS
+            ]
+            timestamps.append(scheduled_at)
+            _GLOBAL_RATE_STATE[key] = timestamps
 
     def _client(self):
         if self.client is not None:
@@ -317,3 +378,8 @@ class AlphaFeedAdapter:
         from alphafeed import AlphaFeed  # type: ignore
 
         return AlphaFeed
+
+
+def _chunks(items: List[str], size: int) -> Iterable[List[str]]:
+    for index in range(0, len(items), size):
+        yield items[index : index + size]

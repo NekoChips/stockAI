@@ -12,6 +12,7 @@ from .backtest import BacktestResult, optimize_strategy_parameters
 from .config import AppConfig, load_config
 from .data.providers import create_history_data_provider, create_market_data_provider, fetch_quotes
 from .features import build_features
+from .history_sync import missing_history_range
 from .journal import build_daily_report
 from .models import Bar, Decision, Fill, Portfolio
 from .monitor import RealTimePaperTradingMonitor
@@ -140,26 +141,31 @@ def run_once_from_store(
     return run_once(config, bars_by_symbol, histories, quote_provider, report_date)
 
 
-def sync_history(config: AppConfig, store: MarketDataStore, adapter=None) -> dict[str, int]:
+def sync_history(config: AppConfig, store: MarketDataStore, adapter=None, as_of: date | None = None) -> dict[str, int]:
     config = replace(config, universe=effective_watchlist(config, store))
     universe = Universe.from_config(config.universe)
     adapter = adapter or create_history_data_provider(config)
     history_config = config.data.history
     interval = str(history_config.get("interval", "daily"))
     adjust = str(history_config.get("adjust", "qfq"))
-    start = str(history_config.get("start", "20240101"))
-    end = str(history_config.get("end", "20500101"))
+    configured_start = str(history_config.get("start", "20240101"))
+    configured_end = str(history_config.get("end", "20500101"))
     counts: dict[str, int] = {}
-    symbols = [instrument.symbol for instrument in universe.instruments]
-    if hasattr(adapter, "get_bars_batch"):
-        batches = adapter.get_bars_batch(symbols, interval=interval, start=start, end=end, adjust=adjust)
-    else:
-        batches = {
-            symbol: adapter.get_bars(symbol, interval=interval, start=start, end=end, adjust=adjust)
-            for symbol in symbols
-        }
-    for symbol in symbols:
-        bars = batches[symbol]
+    for instrument in universe.instruments:
+        symbol = instrument.symbol
+        range_to_sync = missing_history_range(
+            store,
+            symbol,
+            interval,
+            configured_start,
+            configured_end,
+            as_of,
+        )
+        if range_to_sync is None:
+            counts[symbol] = 0
+            continue
+        start, end = range_to_sync
+        bars = adapter.get_bars(symbol, interval=interval, start=start, end=end, adjust=adjust)
         source = getattr(adapter, "last_source", "") or config.data.history_provider
         counts[symbol] = store.save_bars(bars, interval=interval, source=source)
     return counts

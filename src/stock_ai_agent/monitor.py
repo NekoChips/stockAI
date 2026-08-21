@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from .config import AppConfig
 from .data.providers import create_history_data_provider, create_market_data_provider, fetch_quotes
 from .features import build_features
+from .history_sync import missing_history_range, previous_weekday
 from .journal import build_daily_report
 from .models import Bar, Decision, Fill, Portfolio
 from .paper_broker import PaperBroker, PaperBrokerError
@@ -89,7 +90,7 @@ class RealTimePaperTradingMonitor:
         self.history_provider = history_provider or create_history_data_provider(config)
         self.timezone = ZoneInfo(config.timezone)
         self._reported_dates: set[date] = set()
-        self._reference_sync_attempted_dates: set[date] = set()
+        self._catalog_sync_attempted_dates: set[date] = set()
         self._trading_data_ready = False
         self._initialization_warnings: list[str] = []
 
@@ -239,7 +240,7 @@ class RealTimePaperTradingMonitor:
         """Prepare persistent reference data before the monitor may evaluate a strategy."""
         trade_date = trade_date or datetime.now(self.timezone).date()
         warnings: list[str] = []
-        warnings.extend(self._sync_watchlist_history(force=True))
+        warnings.extend(self._sync_watchlist_history(force=False, as_of=trade_date))
         missing = self._symbols_with_insufficient_history()
         if missing:
             warnings.append("观察池历史 K 线未就绪：" + "、".join(missing))
@@ -248,10 +249,10 @@ class RealTimePaperTradingMonitor:
             return False, warnings
         self._initialization_warnings = warnings
         self._trading_data_ready = True
-        self._reference_sync_attempted_dates.add(trade_date)
+        self._catalog_sync_attempted_dates.add(trade_date)
         Thread(
             target=self._sync_reference_data_in_background,
-            args=(trade_date, False),
+            args=(trade_date, False, previous_weekday(trade_date)),
             daemon=True,
         ).start()
         return True, warnings
@@ -269,6 +270,11 @@ class RealTimePaperTradingMonitor:
             local_now = self._local_now(now_fn() if now_fn else None)
             if is_post_close_report_time(local_now, self.config.monitor.post_close_report_time) and local_now.date() not in self._reported_dates:
                 report = self.generate_post_close_report(local_now.date())
+                Thread(
+                    target=self._sync_reference_data_in_background,
+                    args=(local_now.date(), True),
+                    daemon=True,
+                ).start()
                 portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
                 result = MonitorIterationResult("reported", "收盘日报已归档到数据库。", portfolio, [], [], report)
                 self._reported_dates.add(local_now.date())
@@ -312,29 +318,38 @@ class RealTimePaperTradingMonitor:
         return current.astimezone(self.timezone)
 
     def _sync_daily_reference_data(self, trade_date: date) -> None:
-        if trade_date in self._reference_sync_attempted_dates:
+        if trade_date in self._catalog_sync_attempted_dates:
             return
-        self._reference_sync_attempted_dates.add(trade_date)
-        Thread(target=self._sync_reference_data_in_background, args=(trade_date,), daemon=True).start()
+        self._catalog_sync_attempted_dates.add(trade_date)
+        Thread(target=self._sync_catalog_in_background, args=(trade_date,), daemon=True).start()
 
-    def _sync_reference_data_in_background(self, trade_date: date, refresh_history: bool = True) -> None:
-        """Reference data must not delay a market-hours trading iteration."""
+    def _sync_catalog_in_background(self, trade_date: date) -> None:
         if hasattr(self.quote_provider, "list_instruments"):
             try:
                 sync_instrument_catalog(self.config, self.store, self.quote_provider, trade_date.isoformat())
             except Exception:
                 pass
+
+    def _sync_reference_data_in_background(
+        self,
+        trade_date: date,
+        refresh_history: bool = True,
+        history_as_of: date | None = None,
+    ) -> None:
+        """Reference data must not delay a market-hours trading iteration."""
+        self._sync_catalog_in_background(trade_date)
+        history_as_of = history_as_of or trade_date
         if refresh_history:
             try:
-                self._sync_watchlist_history(force=True)
+                self._sync_watchlist_history(force=True, as_of=history_as_of)
             except Exception:
                 pass
         try:
-            sync_benchmark_history(self.config, self.store, self.history_provider)
+            sync_benchmark_history(self.config, self.store, self.history_provider, as_of=history_as_of)
         except Exception:
             pass
 
-    def _sync_watchlist_history(self, force: bool) -> list[str]:
+    def _sync_watchlist_history(self, force: bool, as_of: date | None = None) -> list[str]:
         history = self.config.data.history
         interval = str(history.get("interval", "daily"))
         start = str(history.get("start", "20240101"))
@@ -350,32 +365,30 @@ class RealTimePaperTradingMonitor:
         ]
         if not candidates:
             return warnings
-        symbols = [instrument.symbol for instrument in candidates]
-        try:
-            if hasattr(self.history_provider, "get_bars_batch"):
-                batches = self.history_provider.get_bars_batch(
-                    symbols,
-                    interval=interval,
-                    start=start,
-                    end=end,
-                    adjust=adjust,
-                )
-            else:
-                batches = {
-                    symbol: self.history_provider.get_bars(
-                        symbol,
-                        interval=interval,
-                        start=start,
-                        end=end,
-                        adjust=adjust,
-                    )
-                    for symbol in symbols
-                }
-        except Exception as exc:  # noqa: BLE001 - initialization retries on the next monitor cycle
-            return [f"观察池批量历史 K 线同步失败：{exc}"]
         for instrument in candidates:
             try:
-                bars = batches[instrument.symbol]
+                existing = self.store.load_bars(instrument.symbol, interval=interval, limit=minimum)
+                if not force and len(existing) < minimum:
+                    range_to_sync = (start, min(str(as_of or date.today()).replace("-", ""), end))
+                else:
+                    range_to_sync = missing_history_range(
+                        self.store,
+                        instrument.symbol,
+                        interval,
+                        start,
+                        end,
+                        as_of,
+                    )
+                if range_to_sync is None:
+                    continue
+                sync_start, sync_end = range_to_sync
+                bars = self.history_provider.get_bars(
+                    instrument.symbol,
+                    interval=interval,
+                    start=sync_start,
+                    end=sync_end,
+                    adjust=adjust,
+                )
                 source = getattr(self.history_provider, "last_source", "") or self.config.data.history_provider
                 self.store.save_bars(bars, interval=interval, source=source)
             except Exception as exc:  # noqa: BLE001 - retry is handled by the monitor lifecycle

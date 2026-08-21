@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from stock_ai_agent.config import load_config
@@ -9,6 +10,9 @@ from stock_ai_agent.storage.sqlite import SQLiteMarketDataStore
 
 
 class FakeReferenceAdapter:
+    def __init__(self):
+        self.calls = []
+
     def list_instruments(self):
         return [
             {"symbol": "600519.SH", "name": "贵州茅台", "asset_type": "stock"},
@@ -16,6 +20,7 @@ class FakeReferenceAdapter:
         ]
 
     def get_index_bars(self, symbol, _akshare_symbol, start, end):
+        self.calls.append({"symbol": symbol, "start": start, "end": end})
         from datetime import datetime
         from decimal import Decimal
 
@@ -41,6 +46,18 @@ class ReferenceDataTests(unittest.TestCase):
         self.assertEqual(catalog[0]["symbol"], "600519.SH")
         self.assertEqual(len(benchmark_counts), len(config.benchmarks))
         self.assertEqual(len(benchmark_bars), 2)
+
+    def test_benchmark_sync_requests_only_dates_after_latest_stored_bar(self):
+        config = load_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "reference.sqlite3")
+            adapter = FakeReferenceAdapter()
+            sync_benchmark_history(config, store, adapter, as_of=date(2026, 1, 6))
+            adapter.calls.clear()
+
+            sync_benchmark_history(config, store, adapter, as_of=date(2026, 1, 6))
+
+        self.assertEqual(adapter.calls, [])
 
 
 if __name__ == "__main__":

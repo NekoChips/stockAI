@@ -29,6 +29,10 @@ class FakeKlines:
         self.frames = frames
         self.calls = []
 
+    def get(self, symbol, **kwargs):
+        self.calls.append((symbol, kwargs))
+        return self.frames[symbol]
+
     def batch(self, symbols, **kwargs):
         self.calls.append((list(symbols), kwargs))
         return {symbol: self.frames[symbol] for symbol in symbols}
@@ -78,7 +82,7 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         self.assertEqual(client.quotes.calls[0]["symbols"], ["588170.SH"])
         self.assertTrue(quote.is_fresh)
 
-    def test_batch_kline_call_uses_alpha_feed_period_and_maps_rows(self):
+    def test_kline_requests_are_single_symbol_and_use_alpha_feed_period(self):
         client = FakeAlphaFeedClient(
             kline_frames={
                 "588170.SH": FakeFrame(
@@ -94,16 +98,37 @@ class AlphaFeedAdapterTests(unittest.TestCase):
                             "amount": 12480,
                         }
                     ]
-                )
+                ),
+                "588200.SH": FakeFrame(
+                    [
+                        {
+                            "symbol": "588200.SH",
+                            "trade_date": "2026-08-20",
+                            "open": 1.02,
+                            "high": 1.06,
+                            "low": 1.01,
+                            "close": 1.05,
+                            "volume": 12000,
+                            "amount": 12480,
+                        }
+                    ]
+                ),
             }
         )
-        adapter = AlphaFeedAdapter(client=client, history_count=2000, min_request_interval_seconds=0)
+        adapter = AlphaFeedAdapter(
+            client=client,
+            history_count=2000,
+            min_request_interval_seconds=0,
+            kline_max_requests_per_minute=60,
+            monotonic_fn=lambda: 10,
+            sleep_fn=lambda _seconds: None,
+        )
 
-        bars = adapter.get_bars_batch(["588170.SH"], start="20240101", end="20260821", adjust="qfq")
+        bars = adapter.get_bars_batch(["588170.SH", "588200.SH"], start="20240101", end="20260821", adjust="qfq")
 
         self.assertEqual(bars["588170.SH"][0].close_price, Decimal("1.05"))
-        symbols, kwargs = client.klines.calls[0]
-        self.assertEqual(symbols, ["588170.SH"])
+        self.assertEqual([symbol for symbol, _ in client.klines.calls], ["588170.SH", "588200.SH"])
+        _, kwargs = client.klines.calls[0]
         self.assertEqual(kwargs["period"], "1d")
         self.assertEqual(kwargs["adjust"], "forward")
         self.assertEqual(kwargs["count"], 2000)
@@ -117,13 +142,14 @@ class AlphaFeedAdapterTests(unittest.TestCase):
 
         self.assertIn("ALPHAFEED_API_KEY", str(ctx.exception))
 
-    def test_request_interval_is_applied_between_alpha_feed_calls(self):
+    def test_safe_request_interval_is_applied_between_alpha_feed_calls(self):
         client = FakeAlphaFeedClient(quote_frame=FakeFrame([{"symbol": "588170.SH", "last_price": 1.0, "prev_close": 1.0, "open": 1.0, "high": 1.0, "low": 1.0}]))
         waits = []
         adapter = AlphaFeedAdapter(
             client=client,
             api_key="test-key-interval",
             min_request_interval_seconds=1,
+            quote_max_requests_per_minute=60,
             quote_cache_seconds=0,
             monotonic_fn=lambda: 10,
             sleep_fn=waits.append,
@@ -132,7 +158,7 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         adapter.get_quote("588170.SH")
         adapter.get_quote("588170.SH")
 
-        self.assertEqual(waits, [1])
+        self.assertEqual(waits, [7.5])
 
     def test_quote_cache_avoids_duplicate_sdk_calls(self):
         client = FakeAlphaFeedClient(quote_frame=FakeFrame([{"symbol": "588170.SH", "last_price": 1.0, "prev_close": 1.0, "open": 1.0, "high": 1.0, "low": 1.0}]))
@@ -143,7 +169,7 @@ class AlphaFeedAdapterTests(unittest.TestCase):
 
         self.assertEqual(len(client.quotes.calls), 1)
 
-    def test_request_interval_is_shared_by_adapters_using_same_api_key(self):
+    def test_safe_request_interval_is_shared_by_adapters_using_same_api_key(self):
         clients = [
             FakeAlphaFeedClient(quote_frame=FakeFrame([{"symbol": "588170.SH", "last_price": 1.0, "prev_close": 1.0, "open": 1.0, "high": 1.0, "low": 1.0}]))
             for _ in range(2)
@@ -154,6 +180,7 @@ class AlphaFeedAdapterTests(unittest.TestCase):
                 client=client,
                 api_key="test-key-shared-interval",
                 min_request_interval_seconds=1,
+                quote_max_requests_per_minute=60,
                 quote_cache_seconds=0,
                 monotonic_fn=lambda: 10,
                 sleep_fn=waits.append,
@@ -164,7 +191,81 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         adapters[0].get_quote("588170.SH")
         adapters[1].get_quote("588170.SH")
 
-        self.assertEqual(waits, [1])
+        self.assertEqual(waits, [7.5])
+
+    def test_quote_requests_are_split_into_five_symbol_batches(self):
+        symbols = [f"60000{index}.SH" for index in range(1, 7)]
+        client = FakeAlphaFeedClient(
+            quote_frame=FakeFrame(
+                [
+                    {
+                        "symbol": symbol,
+                        "last_price": 1.0,
+                        "prev_close": 1.0,
+                        "open": 1.0,
+                        "high": 1.0,
+                        "low": 1.0,
+                    }
+                    for symbol in symbols
+                ]
+            )
+        )
+        adapter = AlphaFeedAdapter(
+            client=client,
+            quote_max_symbols_per_request=5,
+            quote_max_requests_per_minute=60,
+            min_request_interval_seconds=0,
+            monotonic_fn=lambda: 10,
+            sleep_fn=lambda _seconds: None,
+        )
+
+        quotes = adapter.get_quotes(symbols)
+
+        self.assertEqual(set(quotes), set(symbols))
+        self.assertEqual([call["symbols"] for call in client.quotes.calls], [symbols[:5], symbols[5:]])
+
+    def test_default_rate_limit_reserves_headroom_below_ten_requests_per_minute(self):
+        client = FakeAlphaFeedClient(
+            quote_frame=FakeFrame(
+                [
+                    {
+                        "symbol": "588170.SH",
+                        "last_price": 1.0,
+                        "prev_close": 1.0,
+                        "open": 1.0,
+                        "high": 1.0,
+                        "low": 1.0,
+                    }
+                ]
+            )
+        )
+        waits = []
+        adapter = AlphaFeedAdapter(
+            client=client,
+            api_key="test-key-eight-per-minute",
+            quote_cache_seconds=0,
+            monotonic_fn=lambda: 10,
+            sleep_fn=waits.append,
+        )
+
+        adapter.get_quote("588170.SH")
+        adapter.get_quote("588170.SH")
+
+        self.assertEqual(waits, [7.5])
+
+    def test_unsafe_alpha_feed_quota_configuration_is_clamped_to_safe_limits(self):
+        adapter = AlphaFeedAdapter(
+            client=FakeAlphaFeedClient(),
+            quote_max_symbols_per_request=99,
+            quote_max_requests_per_minute=99,
+            kline_max_symbols_per_request=99,
+            kline_max_requests_per_minute=99,
+        )
+
+        self.assertEqual(adapter.quote_max_symbols_per_request, 5)
+        self.assertEqual(adapter.quote_max_requests_per_minute, 8)
+        self.assertEqual(adapter.kline_max_symbols_per_request, 1)
+        self.assertEqual(adapter.kline_max_requests_per_minute, 8)
 
     def test_missing_required_quote_field_raises_for_fallback(self):
         client = FakeAlphaFeedClient(quote_frame=FakeFrame([{"symbol": "588170.SH", "last_price": 1.0, "prev_close": 1.0}]))

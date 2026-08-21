@@ -5,6 +5,7 @@ from typing import Any
 
 from .config import AppConfig
 from .data.providers import create_history_data_provider, create_market_data_provider
+from .history_sync import missing_history_range
 from .universe import UniverseError, validate_hs_symbol
 
 
@@ -38,15 +39,27 @@ def sync_instrument_catalog(
     )
 
 
-def sync_benchmark_history(config: AppConfig, store: Any, adapter=None) -> dict[str, int]:
+def sync_benchmark_history(config: AppConfig, store: Any, adapter=None, as_of: date | None = None) -> dict[str, int]:
     adapter = adapter or create_history_data_provider(config)
     if not hasattr(adapter, "get_index_bars"):
         raise ValueError("当前历史数据源暂不支持指数历史 K 线同步。")
     history_config = config.data.history
-    start = str(history_config.get("start", "20240101"))
-    end = str(history_config.get("end", "20500101"))
+    configured_start = str(history_config.get("start", "20240101"))
+    configured_end = str(history_config.get("end", "20500101"))
     counts: dict[str, int] = {}
     for benchmark in config.benchmarks:
+        range_to_sync = missing_history_range(
+            store,
+            benchmark.symbol,
+            "daily",
+            configured_start,
+            configured_end,
+            as_of,
+        )
+        if range_to_sync is None:
+            counts[benchmark.symbol] = 0
+            continue
+        start, end = range_to_sync
         bars = adapter.get_index_bars(benchmark.symbol, benchmark.akshare_symbol, start=start, end=end)
         source = getattr(adapter, "last_source", "") or config.data.history_provider
         counts[benchmark.symbol] = store.save_bars(
