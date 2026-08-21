@@ -13,7 +13,16 @@ class MarketDataStore(Protocol):
     def save_bars(self, bars: List[Bar], interval: str = "daily", source: str = "unknown") -> int:
         ...
 
-    def load_bars(self, symbol: str, interval: str = "daily", limit: int | None = None) -> List[Bar]:
+    def load_bars(self, symbol: str, interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None) -> List[Bar]:
+        ...
+
+    def load_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None) -> dict[str, List[Bar]]:
+        ...
+
+    def ping(self) -> None:
+        ...
+
+    def last_quote_age_seconds(self) -> float | None:
         ...
 
     def save_quotes(self, quotes: List[Quote]) -> int:

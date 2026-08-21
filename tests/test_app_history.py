@@ -7,7 +7,7 @@ from pathlib import Path
 from stock_ai_agent.app import run_once_from_store, sync_history
 from stock_ai_agent.config import load_config
 from stock_ai_agent.models import Bar, Quote
-from stock_ai_agent.storage.sqlite import SQLiteMarketDataStore
+from stock_ai_agent.storage.mock import MockMarketDataStore as SQLiteMarketDataStore
 
 
 class MockHistoryAdapter:

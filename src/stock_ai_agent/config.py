@@ -4,6 +4,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -73,7 +74,9 @@ class StrategyConfig:
     target_weight_levels: List[Decimal]
     manual_approval_required: bool
     weights: Dict[str, Decimal]
+    aggregator: Dict[str, object]
     quant: Dict[str, object]
+    technical: Dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,14 @@ class MonitorConfig:
     post_close_report_time: str
     respect_market_hours: bool
     settle_on_start: bool
+
+
+@dataclass(frozen=True)
+class WebConfig:
+    require_basic_auth: bool
+    username: str
+    password: str
+    analysis_start_date: date
 
 
 @dataclass(frozen=True)
@@ -98,6 +109,7 @@ class AppConfig:
     risk: RiskConfig
     strategy: StrategyConfig
     monitor: MonitorConfig
+    web: WebConfig
 
 
 def _decimal(value: object) -> Decimal:
@@ -113,6 +125,7 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
     risk = raw["risk"]
     strategy = raw["strategy"]
     monitor = raw.get("monitor", {})
+    web = raw.get("web", {})
     mysql_raw = storage.get("mysql")
     mysql = None
     if mysql_raw is not None:
@@ -183,13 +196,21 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
             target_weight_levels=[_decimal(level) for level in strategy["target_weight_levels"]],
             manual_approval_required=bool(strategy["manual_approval_required"]),
             weights={key: _decimal(value) for key, value in strategy["weights"].items()},
+            aggregator=dict(strategy.get("aggregator", {})),
             quant=dict(strategy["quant"]),
+            technical=dict(strategy.get("technical", {})),
         ),
         monitor=MonitorConfig(
             poll_seconds=int(monitor.get("poll_seconds", 60)),
             post_close_report_time=str(monitor.get("post_close_report_time", "15:05")),
             respect_market_hours=bool(monitor.get("respect_market_hours", True)),
             settle_on_start=bool(monitor.get("settle_on_start", True)),
+        ),
+        web=WebConfig(
+            require_basic_auth=bool(web.get("require_basic_auth", False)),
+            username=str(web.get("username", "")),
+            password=str(web.get("password", "")),
+            analysis_start_date=date.fromisoformat(str(web.get("analysis_start_date", "2026-01-01"))),
         ),
     )
 

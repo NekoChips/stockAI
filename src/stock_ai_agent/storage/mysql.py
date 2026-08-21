@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from queue import Empty, LifoQueue
 from threading import Lock
 from typing import Iterator, List
 
@@ -28,6 +29,11 @@ class MySQLMarketDataStore:
         self.password = connection.password
         self._initialized = False
         self._initialize_lock = Lock()
+        self._pool_lock = Lock()
+        self._pool: LifoQueue | None = None
+        self._pool_size = 16
+        self._pool_total = 0
+        self._monitor_lock_connection = None
 
     def initialize(self) -> None:
         if self._initialized:
@@ -38,48 +44,81 @@ class MySQLMarketDataStore:
             self._initialize_schema()
             self._initialized = True
 
+    def acquire_monitor_lock(self, name: str = "stockai_monitor") -> bool:
+        """Acquire a MySQL advisory lock for the lifetime of one monitor process."""
+        self.initialize()
+        with self._initialize_lock:
+            if self._monitor_lock_connection is not None:
+                return True
+            import pymysql
+
+            connection = pymysql.connect(host=self.host, port=self.port, user=self.username, password=self.password, database=self.database, charset="utf8mb4", autocommit=True)
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT GET_LOCK(%s, 0)", (name,))
+                    row = cursor.fetchone()
+                if not row or int(row[0]) != 1:
+                    connection.close()
+                    return False
+                self._monitor_lock_connection = connection
+                return True
+            except Exception:
+                connection.close()
+                raise
+
+    def release_monitor_lock(self, name: str = "stockai_monitor") -> None:
+        connection = self._monitor_lock_connection
+        self._monitor_lock_connection = None
+        if connection is None:
+            return
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT RELEASE_LOCK(%s)", (name,))
+        finally:
+            connection.close()
+
     def _initialize_schema(self) -> None:
         statements = [
             """CREATE TABLE IF NOT EXISTS bars (
-                symbol VARCHAR(32) NOT NULL, interval_name VARCHAR(16) NOT NULL, timestamp_value VARCHAR(40) NOT NULL,
-                open_price VARCHAR(40) NOT NULL, high_price VARCHAR(40) NOT NULL, low_price VARCHAR(40) NOT NULL,
-                close_price VARCHAR(40) NOT NULL, volume VARCHAR(40) NOT NULL, amount VARCHAR(40) NOT NULL,
+                symbol VARCHAR(32) NOT NULL, interval_name VARCHAR(16) NOT NULL, timestamp_value DATETIME(6) NOT NULL,
+                open_price DECIMAL(20,6) NOT NULL, high_price DECIMAL(20,6) NOT NULL, low_price DECIMAL(20,6) NOT NULL,
+                close_price DECIMAL(20,6) NOT NULL, volume DECIMAL(24,4) NOT NULL, amount DECIMAL(24,4) NOT NULL,
                 source VARCHAR(64) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (symbol, interval_name, timestamp_value)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS account_state (
-                id VARCHAR(32) PRIMARY KEY, cash VARCHAR(40) NOT NULL,
+                id VARCHAR(32) PRIMARY KEY, cash DECIMAL(20,6) NOT NULL,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS positions (
                 symbol VARCHAR(32) PRIMARY KEY, quantity BIGINT NOT NULL, available_quantity BIGINT NOT NULL,
-                average_cost VARCHAR(40) NOT NULL, last_price VARCHAR(40) NOT NULL, realized_pnl VARCHAR(40) NOT NULL,
+                average_cost DECIMAL(20,6) NOT NULL, last_price DECIMAL(20,6) NOT NULL, realized_pnl DECIMAL(20,6) NOT NULL,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS decisions (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date VARCHAR(16) NOT NULL, symbol VARCHAR(32) NOT NULL,
-                direction VARCHAR(16) NOT NULL, target_weight VARCHAR(40) NOT NULL, approved TINYINT NOT NULL,
-                reasons TEXT NOT NULL, signal_strategy_id VARCHAR(128), signal_score VARCHAR(40),
-                signal_confidence VARCHAR(40), signal_target_weight VARCHAR(40), signal_evidence TEXT,
+                id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date DATE NOT NULL, symbol VARCHAR(32) NOT NULL,
+                direction VARCHAR(16) NOT NULL, target_weight DECIMAL(12,8) NOT NULL, approved TINYINT NOT NULL,
+                reasons TEXT NOT NULL, signal_strategy_id VARCHAR(128), signal_score DECIMAL(12,8),
+                signal_confidence DECIMAL(12,8), signal_target_weight DECIMAL(12,8), signal_evidence TEXT,
                 signal_objections TEXT, signal_explanation TEXT, signal_version VARCHAR(64),
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_decisions_trade_date (trade_date)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS market_quotes (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date VARCHAR(16) NOT NULL,
+                id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date DATE NOT NULL,
                 symbol VARCHAR(32) NOT NULL, name VARCHAR(128) NOT NULL,
-                latest_price VARCHAR(40) NOT NULL, change_percent VARCHAR(40) NOT NULL,
-                previous_close VARCHAR(40) NOT NULL, quoted_at VARCHAR(40) NOT NULL,
-                observed_at VARCHAR(40) NOT NULL,
+                latest_price DECIMAL(20,6) NOT NULL, change_percent DECIMAL(12,6) NOT NULL,
+                previous_close DECIMAL(20,6) NOT NULL, quoted_at DATETIME(6) NOT NULL,
+                observed_at DATETIME(6) NOT NULL,
                 source VARCHAR(64) NOT NULL,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 UNIQUE KEY uq_market_quotes_tick (trade_date, symbol, observed_at),
                 INDEX idx_market_quotes_latest (symbol, trade_date, observed_at)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS fills (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date VARCHAR(16) NOT NULL, symbol VARCHAR(32) NOT NULL,
-                direction VARCHAR(16) NOT NULL, quantity BIGINT NOT NULL, price VARCHAR(40) NOT NULL,
-                fee VARCHAR(40) NOT NULL, slippage VARCHAR(40) NOT NULL, timestamp_value VARCHAR(40) NOT NULL,
+                id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date DATE NOT NULL, symbol VARCHAR(32) NOT NULL,
+                direction VARCHAR(16) NOT NULL, quantity BIGINT NOT NULL, price DECIMAL(20,6) NOT NULL,
+                fee DECIMAL(20,6) NOT NULL, slippage DECIMAL(20,6) NOT NULL, timestamp_value DATETIME(6) NOT NULL,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_fills_trade_date (trade_date)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS metadata (
@@ -96,13 +135,13 @@ class MySQLMarketDataStore:
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS instrument_catalog (
                 symbol VARCHAR(32) PRIMARY KEY, name VARCHAR(128) NOT NULL, asset_type VARCHAR(16) NOT NULL,
-                source VARCHAR(64) NOT NULL, synced_date VARCHAR(16) NOT NULL,
+                source VARCHAR(64) NOT NULL, synced_date DATE NOT NULL,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 INDEX idx_instrument_catalog_name (name)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS portfolio_snapshots (
-                snapshot_date VARCHAR(16) PRIMARY KEY, cash VARCHAR(40) NOT NULL, total_asset VARCHAR(40) NOT NULL,
-                total_market_value VARCHAR(40) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                snapshot_date DATE PRIMARY KEY, cash DECIMAL(20,6) NOT NULL, total_asset DECIMAL(20,6) NOT NULL,
+                total_market_value DECIMAL(20,6) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS backtest_runs (
@@ -110,8 +149,8 @@ class MySQLMarketDataStore:
                 metrics TEXT NOT NULL, status VARCHAR(32) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS daily_reports (
-                report_date VARCHAR(16) PRIMARY KEY, status VARCHAR(32) NOT NULL, summary TEXT NOT NULL,
-                total_asset VARCHAR(40) NOT NULL, daily_pnl VARCHAR(40) NOT NULL, daily_return VARCHAR(40) NOT NULL,
+                report_date DATE PRIMARY KEY, status VARCHAR(32) NOT NULL, summary TEXT NOT NULL,
+                total_asset DECIMAL(20,6) NOT NULL, daily_pnl DECIMAL(20,6) NOT NULL, daily_return DECIMAL(20,8) NOT NULL,
                 report_data LONGTEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
@@ -150,20 +189,72 @@ class MySQLMarketDataStore:
         if not bars:
             return 0
         self.initialize()
-        rows = [(bar.symbol, interval, bar.timestamp.isoformat(), str(bar.open_price), str(bar.high_price), str(bar.low_price), str(bar.close_price), str(bar.volume), str(bar.amount), source) for bar in bars]
+        rows = [(bar.symbol, interval, _database_datetime(bar.timestamp), str(bar.open_price), str(bar.high_price), str(bar.low_price), str(bar.close_price), str(bar.volume), str(bar.amount), source) for bar in bars]
         sql = """INSERT INTO bars (symbol, interval_name, timestamp_value, open_price, high_price, low_price, close_price, volume, amount, source)
                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                  ON DUPLICATE KEY UPDATE open_price=VALUES(open_price), high_price=VALUES(high_price), low_price=VALUES(low_price), close_price=VALUES(close_price), volume=VALUES(volume), amount=VALUES(amount), source=VALUES(source), updated_at=CURRENT_TIMESTAMP"""
         self._executemany(sql, rows)
         return len(rows)
 
-    def load_bars(self, symbol: str, interval: str = "daily", limit: int | None = None) -> List[Bar]:
+    def load_bars(
+        self,
+        symbol: str,
+        interval: str = "daily",
+        limit: int | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> List[Bar]:
         self.initialize()
+        filters = ["symbol=%s", "interval_name=%s"]
+        params: list[object] = [symbol, interval]
+        if start is not None:
+            filters.append("timestamp_value >= %s")
+            params.append(_database_datetime(datetime.combine(start, time.min)))
+        if end is not None:
+            filters.append("timestamp_value < %s")
+            params.append(_database_datetime(datetime.combine(end + timedelta(days=1), time.min)))
+        where = " AND ".join(filters)
+        select = "symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount"
         if limit is None:
-            rows = self._fetchall("SELECT symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount FROM bars WHERE symbol=%s AND interval_name=%s ORDER BY timestamp_value ASC", (symbol, interval))
+            rows = self._fetchall(f"SELECT {select} FROM bars WHERE {where} ORDER BY timestamp_value ASC", tuple(params))
         else:
-            rows = self._fetchall("SELECT * FROM (SELECT symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount FROM bars WHERE symbol=%s AND interval_name=%s ORDER BY timestamp_value DESC LIMIT %s) AS recent ORDER BY timestamp_value ASC", (symbol, interval, limit))
+            rows = self._fetchall(f"SELECT * FROM (SELECT {select} FROM bars WHERE {where} ORDER BY timestamp_value DESC LIMIT %s) AS recent ORDER BY timestamp_value ASC", (*params, limit))
         return [_bar_from_row(row) for row in rows]
+
+    def load_bars_batch(
+        self,
+        symbols: list[str],
+        interval: str = "daily",
+        limit: int | None = None,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> dict[str, List[Bar]]:
+        """Load all requested instruments in one query, then apply per-symbol limits."""
+        if not symbols:
+            return {}
+        self.initialize()
+        placeholders = ",".join(["%s"] * len(symbols))
+        filters = [f"symbol IN ({placeholders})", "interval_name=%s"]
+        params: list[object] = [*symbols, interval]
+        if start is not None:
+            filters.append("timestamp_value >= %s")
+            params.append(_database_datetime(datetime.combine(start, time.min)))
+        if end is not None:
+            filters.append("timestamp_value < %s")
+            params.append(_database_datetime(datetime.combine(end + timedelta(days=1), time.min)))
+        rows = self._fetchall(
+            f"SELECT symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount "
+            f"FROM bars WHERE {' AND '.join(filters)} ORDER BY symbol ASC, timestamp_value DESC",
+            tuple(params),
+        )
+        result = {symbol: [] for symbol in symbols}
+        for row in rows:
+            bucket = result.setdefault(row[0], [])
+            if limit is None or len(bucket) < limit:
+                bucket.append(_bar_from_row(row))
+        for symbol in result:
+            result[symbol].sort(key=lambda item: item.timestamp)
+        return result
 
     def save_quotes(self, quotes: List[Quote]) -> int:
         if not quotes:
@@ -177,8 +268,8 @@ class MySQLMarketDataStore:
                 str(quote.latest_price),
                 str(quote.change_percent),
                 str(quote.previous_close),
-                quote.timestamp.isoformat(),
-                quote.fetched_at.isoformat(),
+                _database_datetime(quote.timestamp),
+                _database_datetime(quote.fetched_at),
                 quote.source,
             )
             for quote in quotes
@@ -213,8 +304,8 @@ class MySQLMarketDataStore:
                 "latest_price": Decimal(row[2]),
                 "change_percent": Decimal(row[3]),
                 "previous_close": Decimal(row[4]),
-                "quoted_at": row[5],
-                "observed_at": row[6],
+                "quoted_at": _iso_datetime(row[5]),
+                "observed_at": _iso_datetime(row[6]),
                 "source": row[7],
             }
         return latest
@@ -340,7 +431,7 @@ class MySQLMarketDataStore:
 
     def record_fill(self, fill: Fill, trade_date: date | None = None) -> None:
         self.initialize()
-        self._execute("INSERT INTO fills (trade_date, symbol, direction, quantity, price, fee, slippage, timestamp_value) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", ((trade_date or fill.timestamp.date()).isoformat(), fill.symbol, fill.direction.value, fill.quantity, str(fill.price), str(fill.fee), str(fill.slippage), fill.timestamp.isoformat()))
+        self._execute("INSERT INTO fills (trade_date, symbol, direction, quantity, price, fee, slippage, timestamp_value) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", ((trade_date or fill.timestamp.date()).isoformat(), fill.symbol, fill.direction.value, fill.quantity, str(fill.price), str(fill.fee), str(fill.slippage), _database_datetime(fill.timestamp)))
 
     def load_fills(self, trade_date: date) -> List[Fill]:
         self.initialize()
@@ -360,7 +451,20 @@ class MySQLMarketDataStore:
 
     def load_portfolio_snapshots(self) -> list[tuple[date, Decimal]]:
         self.initialize()
-        return [(date.fromisoformat(row[0]), Decimal(row[1])) for row in self._fetchall("SELECT snapshot_date, total_asset FROM portfolio_snapshots ORDER BY snapshot_date ASC")]
+        return [(_as_date(row[0]), Decimal(row[1])) for row in self._fetchall("SELECT snapshot_date, total_asset FROM portfolio_snapshots ORDER BY snapshot_date ASC")]
+
+    def ping(self) -> None:
+        self.initialize()
+        self._fetchone("SELECT 1")
+
+    def last_quote_age_seconds(self) -> float | None:
+        self.initialize()
+        row = self._fetchone("SELECT MAX(observed_at) FROM market_quotes")
+        if not row or row[0] is None:
+            return None
+        observed = _as_datetime(row[0])
+        now = datetime.now(observed.tzinfo) if observed.tzinfo else datetime.now()
+        return max(0.0, (now - observed).total_seconds())
 
     def record_backtest_run(self, strategy_id: str, parameters: dict, metrics: dict, status: str) -> None:
         self.initialize()
@@ -411,7 +515,7 @@ class MySQLMarketDataStore:
         )
         return [
             {
-                "report_date": row[0], "status": row[1], "summary": row[2], "total_asset": row[3],
+                "report_date": _as_date(row[0]).isoformat(), "status": row[1], "summary": row[2], "total_asset": row[3],
                 "daily_pnl": row[4], "daily_return": row[5],
                 "updated_at": row[6].isoformat() if hasattr(row[6], "isoformat") else row[6],
             }
@@ -445,15 +549,82 @@ class MySQLMarketDataStore:
             import pymysql
         except ImportError as exc:
             raise RuntimeError("缺少 PyMySQL 依赖，请重新构建发布镜像或安装 pymysql。") from exc
-        connection = pymysql.connect(host=self.host, port=self.port, user=self.username, password=self.password, database=self.database, charset="utf8mb4", autocommit=False)
+        connection = self._acquire_connection(pymysql)
+        healthy = True
         try:
             yield connection
             connection.commit()
         except Exception:
+            healthy = False
             connection.rollback()
             raise
         finally:
+            self._release_connection(connection, healthy)
+
+    def _get_pool(self) -> LifoQueue:
+        if self._pool is None:
+            with self._pool_lock:
+                if self._pool is None:
+                    self._pool = LifoQueue(maxsize=self._pool_size)
+        return self._pool
+
+    def _acquire_connection(self, pymysql):
+        pool = self._get_pool()
+        while True:
+            try:
+                connection = pool.get_nowait()
+            except Empty:
+                with self._pool_lock:
+                    if self._pool_total < self._pool_size:
+                        self._pool_total += 1
+                        try:
+                            return pymysql.connect(
+                                host=self.host,
+                                port=self.port,
+                                user=self.username,
+                                password=self.password,
+                                database=self.database,
+                                charset="utf8mb4",
+                                autocommit=False,
+                            )
+                        except Exception:
+                            self._pool_total -= 1
+                            raise
+                connection = pool.get()
+            try:
+                connection.ping(reconnect=True)
+                return connection
+            except Exception:
+                connection.close()
+                with self._pool_lock:
+                    self._pool_total = max(0, self._pool_total - 1)
+
+    def _release_connection(self, connection, healthy: bool = True) -> None:
+        if not healthy:
             connection.close()
+            with self._pool_lock:
+                self._pool_total = max(0, self._pool_total - 1)
+            return
+        try:
+            self._get_pool().put_nowait(connection)
+        except Exception:
+            connection.close()
+            with self._pool_lock:
+                self._pool_total = max(0, self._pool_total - 1)
+
+    def close(self) -> None:
+        """Close pooled connections during orderly process shutdown."""
+        pool = self._pool
+        if pool is None:
+            return
+        while True:
+            try:
+                pool.get_nowait().close()
+            except Empty:
+                break
+        with self._pool_lock:
+            self._pool_total = 0
+        self._pool = None
 
     def _validate_connection_settings(self) -> None:
         values = (self.host, self.database, self.username, self.password)
@@ -485,7 +656,30 @@ class MySQLMarketDataStore:
 
 
 def _bar_from_row(row: tuple) -> Bar:
-    return Bar(row[0], datetime.fromisoformat(row[1]), Decimal(row[2]), Decimal(row[3]), Decimal(row[4]), Decimal(row[5]), Decimal(row[6]), Decimal(row[7]))
+    return Bar(row[0], _as_datetime(row[1]), Decimal(row[2]), Decimal(row[3]), Decimal(row[4]), Decimal(row[5]), Decimal(row[6]), Decimal(row[7]))
+
+
+def _database_datetime(value: datetime) -> str:
+    """Store timezone-aware application timestamps as local DATETIME values."""
+    if value.tzinfo is not None:
+        from zoneinfo import ZoneInfo
+
+        value = value.astimezone(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+    return value.isoformat(sep=" ")
+
+
+def _as_date(value: date | datetime | str) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def _as_datetime(value: datetime | str) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value))
 
 
 def _quote_trade_date(quote: Quote) -> str:
@@ -499,7 +693,11 @@ def _quote_trade_date(quote: Quote) -> str:
 
 
 def _quote_row(row: tuple) -> dict:
-    return {"symbol": row[0], "name": row[1], "latest_price": Decimal(row[2]), "change_percent": Decimal(row[3]), "previous_close": Decimal(row[4]), "quoted_at": row[5], "observed_at": row[6], "source": row[7]}
+    return {"symbol": row[0], "name": row[1], "latest_price": Decimal(row[2]), "change_percent": Decimal(row[3]), "previous_close": Decimal(row[4]), "quoted_at": _iso_datetime(row[5]), "observed_at": _iso_datetime(row[6]), "source": row[7]}
+
+
+def _iso_datetime(value: datetime | str) -> str:
+    return value.isoformat() if isinstance(value, datetime) else str(value)
 
 
 def _quote_ticks_to_minute_bars(ticks: list[dict]) -> list[Bar]:
@@ -520,7 +718,7 @@ def _quote_ticks_to_minute_bars(ticks: list[dict]) -> list[Bar]:
 
 
 def _fill_from_row(row: tuple) -> Fill:
-    return Fill(row[0], Direction(row[1]), int(row[2]), Decimal(row[3]), Decimal(row[4]), Decimal(row[5]), datetime.fromisoformat(row[6]))
+    return Fill(row[0], Direction(row[1]), int(row[2]), Decimal(row[3]), Decimal(row[4]), Decimal(row[5]), _as_datetime(row[6]))
 
 
 def _decision_from_row(row: tuple) -> Decision:

@@ -4,9 +4,9 @@ version = "0.1.1"
 description = "A-share and ETF paper-trading AI agent for Shanghai/Shenzhen markets."
 requires-python = ">=3.9"
 dependencies = [
-  "alphafeed>=0.1.4",
-  "akshare>=1.15",
-  "PyMySQL>=1.1"
+  "alphafeed==0.1.4",
+  "akshare==1.15.60",
+  "PyMySQL==1.1.1"
 ]
 
 [build-system]
@@ -18,6 +18,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+stock_ai_agent = ["dashboard.html"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

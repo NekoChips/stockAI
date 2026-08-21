@@ -19,7 +19,7 @@ class QuantContext:
 
 
 def _return(history: List[Decimal], lookback: int) -> Decimal | None:
-    if len(history) <= lookback or history[-lookback - 1] == 0:
+    if lookback <= 0 or len(history) <= lookback or history[-lookback - 1] == 0:
         return None
     return history[-1] / history[-lookback - 1] - Decimal("1")
 
@@ -117,7 +117,10 @@ class DrawdownControlStrategy:
         drawdown = Decimal("1") - current / peak
         if drawdown >= self.stop:
             return _signal(self.strategy_id, symbol, Direction.EXIT, Decimal("-3"), Decimal("0"), [], [f"策略回撤达到 {drawdown:.2%}，触发止损。"])
-        return _signal(self.strategy_id, symbol, Direction.HOLD, Decimal("0.5"), context.current_weight(symbol), [f"策略回撤 {drawdown:.2%}，未触发止损。"])
+        # A non-triggered stop is informational only.  It must not be interpreted
+        # as a target-position cap by the aggregator, otherwise an empty account
+        # can never open its first position.
+        return _signal(self.strategy_id, symbol, Direction.HOLD, Decimal("0.5"), Decimal("1"), [f"策略回撤 {drawdown:.2%}，未触发止损。"])
 
 
 def _watch(strategy_id: str, symbol: str, reason: str) -> StrategySignal:
