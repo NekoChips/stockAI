@@ -24,9 +24,10 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("actions/attest@v4", workflow)
         self.assertIn("ghcr.io/nekochips/stockai", workflow)
         self.assertIn("refs/heads/release", workflow)
-        self.assertIn("type=ref,event=branch", workflow)
         self.assertIn("type=ref,event=tag", workflow)
         self.assertIn("type=raw,value=latest", workflow)
+        self.assertNotIn("type=ref,event=branch", workflow)
+        self.assertNotIn("value=release", workflow)
         self.assertNotIn("value=stable", workflow)
 
     def test_release_environment_exposes_image_selection(self):
