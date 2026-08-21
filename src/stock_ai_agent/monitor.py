@@ -9,7 +9,7 @@ from typing import Callable, List, Optional, Protocol
 from zoneinfo import ZoneInfo
 
 from .config import AppConfig
-from .data.providers import create_history_data_provider, create_market_data_provider
+from .data.providers import create_history_data_provider, create_market_data_provider, fetch_quotes
 from .features import build_features
 from .journal import build_daily_report
 from .models import Bar, Decision, Fill, Portfolio
@@ -121,6 +121,19 @@ class RealTimePaperTradingMonitor:
         decisions: List[Decision] = []
         fills: List[Fill] = []
         warnings: List[str] = []
+        eligible_instruments = [
+            instrument
+            for instrument in universe.instruments
+            if len(bars_by_symbol.get(instrument.symbol, [])) >= minimum_history_bars
+        ]
+        symbols = [instrument.symbol for instrument in eligible_instruments]
+        batch_quotes = None
+        batch_requested = bool(symbols and hasattr(self.quote_provider, "get_quotes"))
+        if batch_requested:
+            try:
+                batch_quotes = fetch_quotes(self.quote_provider, symbols)
+            except Exception as exc:  # noqa: BLE001 - fallback provider errors are isolated from the loop
+                warnings.extend([f"{symbol} 实时行情获取失败：{exc}" for symbol in symbols])
 
         for instrument in universe.instruments:
             bars = bars_by_symbol.get(instrument.symbol, [])
@@ -129,11 +142,19 @@ class RealTimePaperTradingMonitor:
                     f"{instrument.symbol} 历史 K 线不足，至少需要 {minimum_history_bars} 条，当前 {len(bars)} 条。"
                 )
                 continue
-            try:
-                quote = self.quote_provider.get_quote(instrument.symbol)
-            except Exception as exc:  # noqa: BLE001 - provider errors must not stop the monitor loop
-                warnings.append(f"{instrument.symbol} 实时行情获取失败：{exc}")
-                continue
+            if batch_requested:
+                if batch_quotes is None:
+                    continue
+                quote = batch_quotes.get(instrument.symbol)
+                if quote is None:
+                    warnings.append(f"{instrument.symbol} 实时行情返回缺少标的。")
+                    continue
+            else:
+                try:
+                    quote = self.quote_provider.get_quote(instrument.symbol)
+                except Exception as exc:  # noqa: BLE001 - provider errors must not stop the monitor loop
+                    warnings.append(f"{instrument.symbol} 实时行情获取失败：{exc}")
+                    continue
             if instrument.symbol in portfolio.positions:
                 portfolio.positions[instrument.symbol].last_price = quote.latest_price
             try:
@@ -321,17 +342,40 @@ class RealTimePaperTradingMonitor:
         adjust = str(history.get("adjust", "qfq"))
         minimum = int(history.get("monitor_minimum_bars", 35))
         warnings: list[str] = []
-        for instrument in effective_watchlist(self.config, self.store):
-            if not force and len(self.store.load_bars(instrument.symbol, interval=interval, limit=minimum)) >= minimum:
-                continue
-            try:
-                bars = self.history_provider.get_bars(
-                    instrument.symbol,
+        instruments = effective_watchlist(self.config, self.store)
+        candidates = [
+            instrument
+            for instrument in instruments
+            if force or len(self.store.load_bars(instrument.symbol, interval=interval, limit=minimum)) < minimum
+        ]
+        if not candidates:
+            return warnings
+        symbols = [instrument.symbol for instrument in candidates]
+        try:
+            if hasattr(self.history_provider, "get_bars_batch"):
+                batches = self.history_provider.get_bars_batch(
+                    symbols,
                     interval=interval,
                     start=start,
                     end=end,
                     adjust=adjust,
                 )
+            else:
+                batches = {
+                    symbol: self.history_provider.get_bars(
+                        symbol,
+                        interval=interval,
+                        start=start,
+                        end=end,
+                        adjust=adjust,
+                    )
+                    for symbol in symbols
+                }
+        except Exception as exc:  # noqa: BLE001 - initialization retries on the next monitor cycle
+            return [f"观察池批量历史 K 线同步失败：{exc}"]
+        for instrument in candidates:
+            try:
+                bars = batches[instrument.symbol]
                 source = getattr(self.history_provider, "last_source", "") or self.config.data.history_provider
                 self.store.save_bars(bars, interval=interval, source=source)
             except Exception as exc:  # noqa: BLE001 - retry is handled by the monitor lifecycle

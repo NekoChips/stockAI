@@ -34,7 +34,7 @@ def sync_instrument_catalog(
     return store.replace_instrument_catalog(
         items,
         synced_date or date.today().isoformat(),
-        config.data.provider,
+        getattr(adapter, "last_source", "") or config.data.provider,
     )
 
 

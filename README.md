@@ -7,7 +7,7 @@ StockAI 是面向沪深 A 股股票与 ETF 的模拟盘 AI-Agent。它使用公�
 ## 主要能力
 
 - 仅支持沪深 A 股股票与 ETF，默认观察 `588170.SH` 和 `588200.SH`。
-- 使用 AKShare 获取实时行情、历史 K 线、证券目录和指数数据。
+- 默认使用 AlphaFeed Python SDK 获取实时行情和历史 K 线，AlphaFeed 失败、限流或未配置 API Key 时自动切换 AKShare；指数和证券目录继续保留公开源 fallback。
 - 在交易时段执行技术指标与量化策略，经过风控后写入模拟成交和持仓。
 - 提供数据库日报归档、收益与指数对比、盈亏日历、盈亏排行榜和回测记录。
 - Web 看板支持观察池搜索、添加/删除标的，以及回测候选的人工确认。
@@ -34,6 +34,7 @@ ghcr.io/nekochips/stockai:v0.1.1
 - Docker Engine 和 Docker Compose Plugin。
 - 一台可访问的 MySQL，数据库需要提前创建。
 - MySQL 账号需要具备建表、建索引、读写和删除权限。
+- AlphaFeed API Key；部署时填写 Compose 中的 `ALPHAFEED_API_KEY`。未填写时系统会自动使用 AKShare 备用源。
 - GHCR 中的镜像需要是 Public；若为 Private，部署前先登录 GHCR。
 
 仓库中的 [docker-compose.yml](./docker-compose.yml) 是镜像部署文件，直接使用 `ghcr.io/nekochips/stockai:latest`，不需要上传源码或构建镜像。
@@ -44,7 +45,7 @@ ghcr.io/nekochips/stockai:v0.1.1
 
 1. 项目名称填写 `stockai`，选择一个持久化的项目目录。
 2. 将 [docker-compose.yml](./docker-compose.yml) 的内容粘贴到 Compose 配置中。
-3. 将所有 `CHANGE_ME` 替换为实际 MySQL 配置；如数据库端口不是 `3306`，同步修改 `STOCK_AI_MYSQL_PORT`。
+3. 将所有 `CHANGE_ME` 替换为实际 MySQL 配置和 `ALPHAFEED_API_KEY`；如数据库端口不是 `3306`，同步修改 `STOCK_AI_MYSQL_PORT`。
 4. 如果宿主机 `8765` 端口已占用，将映射左侧端口改成其他端口，例如 `8876:8765`。
 5. 点击“立即部署”。
 
@@ -106,7 +107,7 @@ http://部署机地址:8765/healthz
 
 不要使用 `docker compose down -v`，以免误删其他持久化卷。持仓、决策、成交、K 线和日报归档均保存在 MySQL 中，项目不再生成 Markdown 日报文件。
 
-历史 K 线初始化默认先使用 AKShare；失败时会按配置重试并切换到备用公开源。所有源均失败时 monitor 会显示初始化告警并定时重试，避免 Agent 在缺少观察池数据时继续运行。
+行情与历史 K 线默认先使用 AlphaFeed。实时行情每轮按观察池批量请求，并按最小请求间隔限频；历史 K 线使用批量日 K 请求。AlphaFeed 调用失败、返回空数据、SDK 缺失、API Key 缺失或触发限流时，系统自动切换 AKShare，历史指数数据还会继续使用现有公开源 fallback。所有源均失败时 monitor 会显示初始化告警并定时重试，避免 Agent 在缺少观察池数据时继续运行。
 
 ## 数据库配置
 
