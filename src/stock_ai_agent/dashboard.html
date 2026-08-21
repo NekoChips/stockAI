@@ -142,6 +142,8 @@
     tbody tr:last-child td { border-bottom:0; }
     tbody tr:hover { background:#fafcff; }
     .security-name { font-weight:700; }
+    .security-link { display:block; max-width:100%; padding:0; border:0; background:transparent; color:var(--ink); font:inherit; font-weight:700; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .security-link:hover { color:var(--blue-dark); text-decoration:underline; text-underline-offset:3px; }
     .security-code { margin-top:2px; color:var(--quiet); font:500 11px/1.2 "Fira Code","SFMono-Regular",monospace; }
     .watch-row td { background:#fbfdff; color:var(--subtle); }
     .watch-state { color:var(--blue-dark); font-size:12px; font-weight:700; }
@@ -231,6 +233,33 @@
     .evidence-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
     .evidence-item { padding:4px 7px; border:1px solid #d5e2f4; border-radius:4px; background:#f8fbff; color:#365a86; font-size:11px; }
     .report-loading { display:grid; place-items:center; min-height:320px; padding:32px; color:var(--subtle); text-align:center; }
+    .instrument-detail { display:grid; gap:20px; }
+    .detail-back { width:max-content; }
+    .instrument-hero { display:grid; grid-template-columns:minmax(0,1.5fr) repeat(3,minmax(132px,.7fr)); border-bottom:1px solid #edf1f6; }
+    .instrument-summary, .instrument-stat { min-width:0; padding:20px; border-right:1px solid #edf1f6; }
+    .instrument-stat:last-child { border-right:0; }
+    .instrument-symbol { margin-top:5px; color:var(--subtle); font:500 13px/1.2 "Fira Code","SFMono-Regular",monospace; }
+    .instrument-name { margin-top:4px; font-size:25px; line-height:1.2; font-weight:750; letter-spacing:0; overflow-wrap:anywhere; }
+    .instrument-stat strong { display:block; margin-top:7px; font:700 19px/1.1 "Fira Code","SFMono-Regular",monospace; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    .instrument-stat .stat-note { display:block; margin-top:5px; color:var(--subtle); font-size:12px; }
+    .instrument-chart-tools { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:14px 20px; border-bottom:1px solid #edf1f6; }
+    .instrument-period-tabs { display:flex; min-width:0; gap:5px; overflow-x:auto; scrollbar-width:thin; }
+    .instrument-period-tabs button { flex:none; min-height:34px; padding:0 10px; border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--subtle); font-size:12px; font-weight:650; white-space:nowrap; }
+    .instrument-period-tabs button.active { border-color:#a9c8f7; background:var(--blue-wash); color:var(--blue-dark); }
+    .instrument-chart-note { flex:none; color:var(--subtle); font-size:12px; white-space:nowrap; }
+    .instrument-chart-wrap { position:relative; height:430px; padding:12px 10px 8px; }
+    #instrumentChart { display:block; width:100%; height:100%; border-radius:4px; outline:none; }
+    .instrument-chart-tooltip { position:absolute; z-index:2; display:none; min-width:184px; max-width:min(300px,calc(100% - 16px)); pointer-events:none; padding:10px 12px; border:1px solid #c8d7ec; border-radius:6px; background:rgba(255,255,255,.98); box-shadow:0 8px 20px rgba(16,24,40,.12); color:var(--ink); font-size:12px; }
+    .instrument-chart-tooltip.visible { display:block; }
+    .instrument-chart-tooltip strong { display:block; margin-bottom:6px; font-family:"Fira Code","SFMono-Regular",monospace; }
+    .instrument-detail-footer { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,.75fr); border-top:1px solid #edf1f6; }
+    .instrument-detail-section { min-width:0; padding:18px 20px; border-right:1px solid #edf1f6; }
+    .instrument-detail-section:last-child { border-right:0; }
+    .instrument-detail-section h3 { margin:0; font-size:15px; }
+    .trade-marker-list { display:grid; gap:8px; margin-top:12px; max-height:190px; overflow:auto; }
+    .trade-marker-item { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:9px 0; border-top:1px solid #edf1f6; font-size:12px; }
+    .trade-marker-item:first-child { border-top:0; padding-top:0; }
+    .trade-marker-item time { color:var(--subtle); font:500 11px/1.2 "Fira Code","SFMono-Regular",monospace; white-space:nowrap; }
     .muted, .empty { color:var(--subtle); font-size:13px; }
     .empty { padding:24px 20px; text-align:center; }
     .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
@@ -315,6 +344,16 @@
       .report-metric:nth-child(3) { border-right:0; }
       .report-metric:last-child { grid-column:1 / -1; border-top:1px solid #edf1f6; }
       .report-section { padding:18px 16px; }
+      .instrument-hero { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .instrument-summary { grid-column:1 / -1; border-right:0; border-bottom:1px solid #edf1f6; }
+      .instrument-stat:nth-child(3) { border-right:0; }
+      .instrument-stat:last-child { grid-column:1 / -1; border-top:1px solid #edf1f6; }
+      .instrument-chart-tools { align-items:flex-start; flex-direction:column; padding-right:16px; padding-left:16px; }
+      .instrument-period-tabs { width:100%; }
+      .instrument-chart-wrap { height:320px; padding-right:2px; padding-left:2px; }
+      .instrument-detail-footer { grid-template-columns:1fr; }
+      .instrument-detail-section { padding:18px 16px; border-right:0; border-bottom:1px solid #edf1f6; }
+      .instrument-detail-section:last-child { border-bottom:0; }
       .instrument-drawer { width:100%; height:auto; max-height:82vh; margin-top:auto; border-radius:10px 10px 0 0; transform:translateY(100%); }
       .drawer-backdrop.open .instrument-drawer { transform:translateY(0); }
     }
@@ -392,6 +431,24 @@
         <section class="panel report-detail" id="dailyReportDetail" aria-live="polite"><div class="report-loading">选择一份日报查看账户、持仓、成交与决策逻辑。</div></section>
       </div>
     </div>
+    <section class="view hidden instrument-detail" id="instrumentDetailView" aria-labelledby="instrumentDetailTitle" tabindex="-1">
+      <button class="secondary-button detail-back" type="button" onclick="closeInstrumentDetail()"><i data-lucide="arrow-left" aria-hidden="true"></i>返回交易看板</button>
+      <section class="panel" aria-live="polite">
+        <div class="instrument-hero">
+          <div class="instrument-summary"><span class="kicker">标的详情</span><h2 class="instrument-name" id="instrumentDetailTitle">正在加载标的</h2><div class="instrument-symbol" id="instrumentDetailSymbol">--</div></div>
+          <div class="instrument-stat"><span class="kicker">最新价</span><strong id="instrumentLatestPrice">--</strong><span class="stat-note" id="instrumentQuoteTime">等待行情快照</span></div>
+          <div class="instrument-stat"><span class="kicker">今日涨跌</span><strong id="instrumentChange">--</strong><span class="stat-note" id="instrumentPreviousClose">昨收 --</span></div>
+          <div class="instrument-stat"><span class="kicker">模拟成交</span><strong id="instrumentFillCount">--</strong><span class="stat-note">标记显示在图表中</span></div>
+        </div>
+        <div class="instrument-chart-tools"><div class="instrument-period-tabs" id="instrumentPeriodTabs" aria-label="K线周期"></div><span class="instrument-chart-note" id="instrumentChartNote">本地快照数据</span></div>
+        <div class="instrument-chart-wrap"><canvas id="instrumentChart" tabindex="0" role="img" aria-describedby="instrumentChartText" aria-label="标的行情图。可使用左右方向键读取行情数据。"></canvas><div id="instrumentChartTooltip" class="instrument-chart-tooltip" role="status" aria-live="polite"></div></div>
+        <p class="sr-only" id="instrumentChartText">正在加载标的行情数据。</p>
+        <div class="instrument-detail-footer">
+          <section class="instrument-detail-section"><h3>数据说明</h3><p class="panel-note" id="instrumentDataNote">分时与分钟 K 由当日监控快照聚合；日、周、月 K 使用已入库历史日线。</p></section>
+          <section class="instrument-detail-section"><h3>模拟操作</h3><div class="trade-marker-list" id="instrumentMarkerList"><p class="panel-note">暂无模拟成交。</p></div></section>
+        </div>
+      </section>
+    </section>
   </main>
   <div class="drawer-backdrop" id="instrumentDrawerBackdrop" aria-hidden="true" onclick="closeInstrumentDrawer(event)">
     <aside class="instrument-drawer" role="dialog" aria-modal="true" aria-labelledby="instrumentDrawerTitle" onclick="event.stopPropagation()">
@@ -407,7 +464,7 @@
     const tone = value => Number(value) > 0 ? 'gain' : Number(value) < 0 ? 'loss' : 'neutral';
     const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, item => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[item]));
     const seriesStyle = [{color:'#1769e0',dash:[],label:'AI-Agent'}, {color:'#a9640f',dash:[7,4]}, {color:'#7b61a8',dash:[3,3]}, {color:'#187a65',dash:[10,4]}, {color:'#536b91',dash:[2,4]}, {color:'#b5474d',dash:[8,3,2,3]}];
-    let latestData = null, rankRows = [], sortKey = 'profit_amount', sortAsc = false, chartMode = 'return', performanceRangeMode = 'yearly', performanceStart = null, performanceEnd = null, performancePickerRoot = null, calendarMode = 'monthly', calendarValueMode = 'amount', calendarPeriod = null, calendarPickerRoot = null, selectedInstrument = null, instrumentSearchTimer = null;
+    let latestData = null, rankRows = [], sortKey = 'profit_amount', sortAsc = false, chartMode = 'return', performanceRangeMode = 'yearly', performanceStart = null, performanceEnd = null, performancePickerRoot = null, calendarMode = 'monthly', calendarValueMode = 'amount', calendarPeriod = null, calendarPickerRoot = null, selectedInstrument = null, instrumentSearchTimer = null, instrumentDetail = null, instrumentDetailPeriod = 'intraday', instrumentChartState = null, instrumentChartFocusIndex = -1, instrumentChartObserver = null;
     let visibleSeries = new Set(), knownSeries = new Set(), chartState = null, chartFocusIndex = -1, loading = false, chartObserver = null;
     let overviewPromise = null, performanceRequestId = 0, backtestsLoaded = false, dailyReportsLoaded = false, dailyReportsLoading = false, selectedReportDate = null, dailyReportRows = [], dailyReportOffset = 0, dailyReportsHasMore = false;
     const DAILY_REPORT_PAGE_SIZE = 30;
@@ -619,7 +676,8 @@
       document.getElementById('positionLine').textContent = '持仓 ' + (portfolio.positions || []).length + ' 个';
       const dailyEl = document.getElementById('dailyReturn');
       dailyEl.textContent = fmtPct(daily); dailyEl.className = tone(daily);
-      document.getElementById('decisionCount').textContent = (data.today_decisions || []).length + ' 条';
+      const actionCount=(data.today_decisions || []).filter(item=>!['观望','持有'].includes(item.direction)).length;
+      document.getElementById('decisionCount').textContent = actionCount ? actionCount + ' 条' : '观望中';
       document.getElementById('fillCount').textContent = (data.recent_fills || []).length + ' 笔';
       document.getElementById('backtestCount').textContent = pending + ' 组';
       document.getElementById('updated').textContent = new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
@@ -724,7 +782,13 @@
     }
     function renderDecisionTimeline(data) {
       const decisions=data.today_decisions || [], fills=data.recent_fills || [];
-      const actual=decisions.map((item,index) => ({kind:item.approved?'approved':'rejected', title:(item.direction || '观望') + ' · ' + item.symbol, detail:(item.reasons || []).join('；') || (item.approved?'风控通过，等待模拟执行。':'风控未批准本次建议。'), time:'策略 ' + String(index+1)}));
+      const actionable=decisions.filter(item=>!['观望','持有'].includes(item.direction));
+      const watching=decisions.filter(item=>['观望','持有'].includes(item.direction));
+      const actual=actionable.map((item,index) => ({kind:item.approved?'approved':'rejected', title:(item.direction || '观望') + ' · ' + item.symbol, detail:(item.reasons || []).join('；') || (item.approved?'风控通过，等待模拟执行。':'风控未批准本次建议。'), time:'策略 ' + String(index+1)}));
+      if (watching.length) {
+        const symbols=[...new Set(watching.map(item=>item.symbol))];
+        actual.push({kind:'',title:'持续观望 · '+symbols.join('、'),detail:'当前未形成满足风控条件的交易信号，监控将继续跟踪。',time:'本日状态'});
+      }
       fills.slice().reverse().forEach(fill => actual.push({kind:'approved',title:'模拟成交 · '+fill.symbol,detail:(fill.direction || '成交')+' '+fill.quantity+' 份，成交价 '+fmtMoney(fill.price),time:'最近成交'}));
       const readiness=[
         {kind:'approved',title:'行情订阅已就绪',detail:'已连接当前模拟盘数据流，等待下一次轮询结果。',time:'实时监控'},
@@ -733,19 +797,173 @@
         {kind:'',title:'模拟订单待命',detail:'仅在策略与风控同时满足时创建模拟订单。',time:'执行层'}
       ];
       const records=actual.length ? actual.concat(readiness.slice(0,Math.max(0,4-actual.length))) : readiness;
-      document.getElementById('decisionMeta').textContent=actual.length ? actual.length+' 条记录' : '待命流程';
+      document.getElementById('decisionMeta').textContent=actionable.length ? actionable.length+' 条有效决策' : (watching.length?'持续观望':'待命流程');
       document.getElementById('decisionTimeline').innerHTML=records.map(item => '<li class="decision-item"><span class="decision-node '+item.kind+'" aria-hidden="true"></span><div><div class="decision-top"><strong>'+escapeHtml(item.title)+'</strong><span class="decision-time">'+escapeHtml(item.time)+'</span></div><div class="decision-detail">'+escapeHtml(item.detail)+'</div></div></li>').join('');
     }
     function renderPositions(data) {
       const rows=[...(data.portfolio?.positions || [])].sort((a,b)=>Number(b.market_value)-Number(a.market_value));
       const watchlist=Array.isArray(data.watchlist) ? data.watchlist : [];
       const names=Object.fromEntries(watchlist.map(item=>[item.symbol,item.name]));
-      const actual=rows.map(item => '<tr><td><div class="security-name">'+escapeHtml(names[item.symbol] || item.symbol)+'</div><div class="security-code">'+escapeHtml(item.symbol)+' · 沪深模拟盘</div></td><td>'+item.quantity+'</td><td>'+item.available_quantity+'</td><td>'+fmtMoney(item.average_cost)+'</td><td>'+fmtMoney(item.last_price)+'</td><td>'+fmtMoney(item.market_value)+'</td><td class="'+tone(item.unrealized_pnl)+'">'+fmtMoney(item.unrealized_pnl)+'</td><td class="muted">持仓中</td></tr>').join('');
-      const watching=watchlist.filter(item => !rows.some(position => position.symbol===item.symbol)).map(item => '<tr class="watch-row"><td><div class="security-name">'+escapeHtml(item.name)+'</div><div class="security-code">'+escapeHtml(item.symbol)+' · 观察池</div></td><td>--</td><td>--</td><td>--</td><td>--</td><td>--</td><td class="watch-state">等待信号</td><td><button class="icon-button table-action" type="button" data-remove-symbol="'+escapeHtml(item.symbol)+'" aria-label="移除 '+escapeHtml(item.name)+'" title="移出观察池"><i data-lucide="trash-2" aria-hidden="true"></i></button></td></tr>').join('');
+      const quotes=data.market_quotes || {};
+      const quotePrice=(quote,fallback='--')=>quote?.latest_price==null?fallback:fmtMoney(quote.latest_price);
+      const quoteChange=quote=>quote?.change_percent==null?'--':'<span class="'+tone(quote.change_percent)+'">'+fmtPct(quote.change_percent/100)+'</span>';
+      const detailLink=(symbol,name)=>'<button class="security-link" type="button" data-instrument-symbol="'+escapeHtml(symbol)+'" aria-label="查看 '+escapeHtml(name)+' 标的详情">'+escapeHtml(name)+'</button>';
+      const actual=rows.map(item => { const quote=quotes[item.symbol]; const name=names[item.symbol] || quote?.name || item.symbol, latest=Number(quote?.latest_price ?? item.last_price ?? 0); const marketValue=latest*Number(item.quantity || 0), floating=marketValue-Number(item.average_cost || 0)*Number(item.quantity || 0); return '<tr><td><div class="security-name">'+detailLink(item.symbol,name)+'</div><div class="security-code">'+escapeHtml(item.symbol)+' · 沪深模拟盘</div></td><td>'+item.quantity+'</td><td>'+item.available_quantity+'</td><td>'+fmtMoney(item.average_cost)+'</td><td>'+fmtMoney(latest)+'</td><td>'+quoteChange(quote)+'</td><td>'+fmtMoney(marketValue)+'</td><td class="'+tone(floating)+'">'+fmtMoney(floating)+'</td><td class="muted">持仓中</td></tr>'; }).join('');
+      const watching=watchlist.filter(item => !rows.some(position => position.symbol===item.symbol)).map(item => { const quote=quotes[item.symbol], name=item.name || quote?.name || item.symbol; return '<tr class="watch-row"><td><div class="security-name">'+detailLink(item.symbol,name)+'</div><div class="security-code">'+escapeHtml(item.symbol)+' · 观察池</div></td><td>--</td><td>--</td><td>--</td><td>'+quotePrice(quote)+'</td><td>'+quoteChange(quote)+'</td><td>--</td><td class="watch-state">等待信号</td><td><button class="icon-button table-action" type="button" data-remove-symbol="'+escapeHtml(item.symbol)+'" aria-label="移除 '+escapeHtml(item.name)+'" title="移出观察池"><i data-lucide="trash-2" aria-hidden="true"></i></button></td></tr>'; }).join('');
       const portfolio=data.portfolio || {}, asset=Number(portfolio.total_asset || 0), market=Number(portfolio.total_market_value || 0);
       document.getElementById('positionMeta').textContent=rows.length ? rows.length+' 个持仓' : '观察池 '+watchlist.length+' 只';
-      document.getElementById('positions').innerHTML='<div class="positions-scroll" role="region" aria-label="实时持仓列表，可滚动查看全部记录"><div class="table-wrap"><table><thead><tr><th>证券</th><th>持仓</th><th>可卖</th><th>成本</th><th>现价</th><th>市值</th><th>浮动盈亏</th><th>操作</th></tr></thead><tbody>'+actual+watching+'</tbody></table></div></div><div class="positions-footer"><div class="positions-status"><span class="kicker">当前仓位</span><strong>'+fmtPct(asset ? market / asset : 0)+'</strong></div><div class="positions-status"><span class="kicker">可用资金</span><strong>'+fmtMoney(portfolio.cash)+' 元</strong></div><div class="positions-status"><span class="kicker">执行状态</span><strong>'+ (rows.length ? '持仓跟踪中' : '等待建仓信号') +'</strong></div></div>';
+      document.getElementById('positions').innerHTML='<div class="positions-scroll" role="region" aria-label="实时持仓列表，可滚动查看全部记录"><div class="table-wrap"><table><thead><tr><th>证券</th><th>持仓</th><th>可卖</th><th>成本</th><th>现价</th><th>今日涨跌</th><th>市值</th><th>浮动盈亏</th><th>操作</th></tr></thead><tbody>'+actual+watching+'</tbody></table></div></div><div class="positions-footer"><div class="positions-status"><span class="kicker">当前仓位</span><strong>'+fmtPct(asset ? market / asset : 0)+'</strong></div><div class="positions-status"><span class="kicker">可用资金</span><strong>'+fmtMoney(portfolio.cash)+' 元</strong></div><div class="positions-status"><span class="kicker">执行状态</span><strong>'+ (rows.length ? '持仓跟踪中' : '等待建仓信号') +'</strong></div></div>';
       document.querySelectorAll('[data-remove-symbol]').forEach(button => button.addEventListener('click', () => removeWatchlistItem(button.dataset.removeSymbol)));
+      document.querySelectorAll('[data-instrument-symbol]').forEach(button => button.addEventListener('click', () => openInstrumentDetail(button.dataset.instrumentSymbol)));
+    }
+    const instrumentPeriods = [
+      ['intraday','分时'], ['five_day','五日'], ['1m','1分钟'], ['5m','5分钟'], ['15m','15分钟'], ['30m','30分钟'], ['60m','60分钟'], ['daily','日K'], ['weekly','周K'], ['monthly','月K']
+    ];
+    function showDashboardView(viewId) {
+      document.querySelectorAll('.view').forEach(view => view.classList.toggle('hidden', view.id !== viewId));
+      document.querySelectorAll('#appTabs .view-tab').forEach(tab => {
+        const active=tab.dataset.view===viewId;
+        tab.classList.toggle('active',active);
+        tab.setAttribute('aria-selected',String(active));
+      });
+    }
+    async function openInstrumentDetail(symbol) {
+      showDashboardView('instrumentDetailView');
+      window.scrollTo(0,0);
+      document.getElementById('instrumentDetailView').focus({preventScroll:true});
+      document.getElementById('instrumentDetailTitle').textContent='正在加载标的';
+      document.getElementById('instrumentDetailSymbol').textContent=symbol;
+      document.getElementById('instrumentChartText').textContent='正在读取本地行情与模拟成交数据。';
+      try {
+        const response=await fetchDashboardSection('/api/instruments/'+encodeURIComponent(symbol)+'/detail');
+        instrumentDetail=response;
+        instrumentDetailPeriod='intraday';
+        instrumentChartFocusIndex=-1;
+        renderInstrumentDetail();
+        announce(response.instrument.name+' 标的详情已打开。');
+      } catch (error) {
+        document.getElementById('instrumentDetailTitle').textContent='标的详情读取失败';
+        document.getElementById('instrumentChartText').textContent='无法读取本地行情数据，请稍后重试。';
+        document.getElementById('instrumentMarkerList').innerHTML='<p class="panel-note">数据读取失败。</p>';
+        announce('标的详情读取失败。');
+      }
+    }
+    function closeInstrumentDetail() {
+      instrumentChartState=null;
+      showDashboardView('dashboardView');
+      document.getElementById('dashboardView').focus({preventScroll:true});
+    }
+    function quoteTimeLabel(value) {
+      if (!value) return '等待行情快照';
+      const time=new Date(value);
+      return Number.isNaN(time.getTime()) ? String(value).replace('T',' ').slice(0,16) : time.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+    }
+    function renderInstrumentDetail() {
+      const data=instrumentDetail, instrument=data?.instrument || {}, quote=data?.latest_quote || {}, markers=data?.trade_markers || [];
+      document.getElementById('instrumentDetailTitle').textContent=instrument.name || instrument.symbol || '标的详情';
+      document.getElementById('instrumentDetailSymbol').textContent=(instrument.symbol || '--')+' · '+(instrument.asset_type==='etf'?'ETF':'沪深股票');
+      document.getElementById('instrumentLatestPrice').textContent=quote.latest_price==null?'--':fmtMoney(quote.latest_price);
+      document.getElementById('instrumentQuoteTime').textContent=quoteTimeLabel(quote.observed_at || quote.quoted_at || quote.updated_at);
+      const change=Number(quote.change_percent);
+      const changeTarget=document.getElementById('instrumentChange');
+      changeTarget.textContent=Number.isFinite(change)?fmtPct(change/100):'--';
+      changeTarget.className=Number.isFinite(change)?tone(change):'';
+      document.getElementById('instrumentPreviousClose').textContent=quote.previous_close==null?'昨收 --':'昨收 '+fmtMoney(quote.previous_close);
+      document.getElementById('instrumentFillCount').textContent=markers.length+' 笔';
+      document.getElementById('instrumentPeriodTabs').innerHTML=instrumentPeriods.map(([key,label]) => '<button type="button" data-instrument-period="'+key+'" class="'+(instrumentDetailPeriod===key?'active':'')+'" aria-pressed="'+(instrumentDetailPeriod===key)+'">'+label+'</button>').join('');
+      document.querySelectorAll('[data-instrument-period]').forEach(button=>button.addEventListener('click',()=>setInstrumentPeriod(button.dataset.instrumentPeriod)));
+      document.getElementById('instrumentMarkerList').innerHTML=markers.length ? markers.slice().reverse().map(marker=>'<article class="trade-marker-item"><div><span class="status-badge '+(['卖出','减仓','清仓'].includes(marker.direction)?'confirmed':'')+'">'+escapeHtml(marker.direction)+'</span><div class="panel-note">'+escapeHtml(marker.summary)+'</div></div><time>'+escapeHtml(quoteTimeLabel(marker.timestamp))+'</time></article>').join('') : '<p class="panel-note">暂无模拟成交；后续买入、加减仓和清仓会在图中标记。</p>';
+      renderInstrumentChart();
+      iconify();
+    }
+    function setInstrumentPeriod(period) {
+      instrumentDetailPeriod=period;
+      instrumentChartFocusIndex=-1;
+      if (instrumentDetail) renderInstrumentDetail();
+    }
+    function instrumentPeriodPoints() {
+      const data=instrumentDetail || {};
+      if (instrumentDetailPeriod==='intraday') return (data.intraday?.ticks || []).map(item=>({time:item.observed_at || item.quoted_at, close:Number(item.latest_price), open:Number(item.latest_price), high:Number(item.latest_price), low:Number(item.latest_price)}));
+      const source=instrumentDetailPeriod==='five_day' ? data.five_day : instrumentDetailPeriod.endsWith('m') ? data.minute_bars?.[instrumentDetailPeriod] : data[instrumentDetailPeriod];
+      return (source || []).map(item=>({time:item.time,open:Number(item.open),high:Number(item.high),low:Number(item.low),close:Number(item.close)}));
+    }
+    function instrumentTimeLabel(value, compact=false) {
+      const raw=String(value || '');
+      if (!raw) return '--';
+      const normalized=raw.replace('T',' ');
+      return compact ? (normalized.includes(' ') ? normalized.slice(5,16) : normalized.slice(5,10)) : normalized.slice(0,16);
+    }
+    function renderInstrumentChart() {
+      const points=instrumentPeriodPoints(), candles=!['intraday','five_day'].includes(instrumentDetailPeriod);
+      const label=instrumentPeriods.find(item=>item[0]===instrumentDetailPeriod)?.[1] || instrumentDetailPeriod;
+      const dayCount=instrumentDetailPeriod==='five_day' ? Number(instrumentDetail?.five_day_trading_days || 0) : 0;
+      document.getElementById('instrumentChartNote').textContent=label+' · '+(points.length?(dayCount ? dayCount+' 个交易日 / ' : '')+points.length+' 个数据点':'暂无数据');
+      document.getElementById('instrumentChartText').textContent=points.length ? (label+'共 '+points.length+' 个数据点，左右方向键可逐点查看；图中 B/S 标记为模拟交易。') : (label+'暂无本地数据。监控运行后会逐步沉淀。');
+      const markers=instrumentDetail?.trade_markers || [];
+      instrumentChartState={points,candles,markers};
+      instrumentChartFocusIndex=Math.min(Math.max(instrumentChartFocusIndex,0),Math.max(points.length-1,0));
+      drawInstrumentChart();
+      bindInstrumentChartInteractions();
+    }
+    function drawInstrumentChart() {
+      const canvas=document.getElementById('instrumentChart'), ctx=canvas.getContext('2d'), rect=canvas.getBoundingClientRect(), ratio=window.devicePixelRatio||1;
+      const width=Math.max(280,Math.floor(rect.width)), height=Math.max(240,Math.floor(rect.height));
+      canvas.width=width*ratio; canvas.height=height*ratio; ctx.setTransform(ratio,0,0,ratio,0,0); ctx.clearRect(0,0,width,height);
+      const state=instrumentChartState, points=state?.points || [];
+      if (!points.length) { ctx.fillStyle='#667085'; ctx.font='14px Fira Sans, sans-serif'; ctx.fillText('暂无本地行情数据',24,38); return; }
+      const prices=points.flatMap(item=>state.candles?[item.high,item.low]:[item.close]);
+      let min=Math.min(...prices), max=Math.max(...prices), padding=Math.max((max-min)*.08,max*.003,.01); if (min===max) padding=Math.max(max*.01,.01); min-=padding; max+=padding;
+      const left=56,right=18,top=20,bottom=36,graphW=width-left-right,graphH=height-top-bottom;
+      const yFor=value=>top+graphH-((value-min)*graphH/(max-min));
+      const xFor=index=>left+(points.length===1?graphW/2:index*graphW/(points.length-1));
+      ctx.font='11px Fira Sans, sans-serif'; ctx.lineWidth=1; ctx.strokeStyle='#e6edf6'; ctx.fillStyle='#667085';
+      for(let index=0;index<5;index++){const y=top+graphH*index/4,value=max-(max-min)*index/4;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(width-right,y);ctx.stroke();ctx.fillText(fmtMoney(value),4,y+4);}
+      ctx.fillText(instrumentTimeLabel(points[0].time,true),left,height-11);ctx.fillText(instrumentTimeLabel(points.at(-1).time,true),Math.max(left,width-right-90),height-11);
+      if (state.candles) {
+        const body=Math.max(3,Math.min(14,graphW/Math.max(points.length,1)*.62));
+        points.forEach((point,index)=>{const x=xFor(index), rising=point.close>=point.open;ctx.strokeStyle=rising?'#d92d20':'#07875b';ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,yFor(point.high));ctx.lineTo(x,yFor(point.low));ctx.stroke();const y=Math.min(yFor(point.open),yFor(point.close)),h=Math.max(1,Math.abs(yFor(point.open)-yFor(point.close)));if(rising)ctx.fillRect(x-body/2,y,body,h);else {ctx.strokeRect(x-body/2,y,body,h);}});
+      } else {
+        ctx.beginPath();ctx.strokeStyle='#1769e0';ctx.lineWidth=2.5;points.forEach((point,index)=>{const x=xFor(index),y=yFor(point.close);index?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();
+      }
+      const markerMap=new Map();
+      (state.markers || []).forEach(marker=>{const index=instrumentMarkerIndex(marker,points,instrumentDetailPeriod);if(index<0)return;if(!markerMap.has(index))markerMap.set(index,[]);markerMap.get(index).push(marker);});
+      markerMap.forEach((markers,index)=>{const marker=markers.at(-1), sell=['卖出','减仓','清仓'].includes(marker.direction), x=xFor(index), y=Math.max(top+10,yFor(points[index].close)-(sell?-18:18));ctx.fillStyle=sell?'#07875b':'#d92d20';ctx.beginPath();ctx.arc(x,y,10,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.font='700 10px Fira Sans, sans-serif';ctx.textAlign='center';ctx.fillText(sell?'S':'B',x,y+3.5);ctx.textAlign='left';});
+      if (instrumentChartFocusIndex>=0) {const x=xFor(instrumentChartFocusIndex);ctx.strokeStyle='#8aa6ca';ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,top+graphH);ctx.stroke();ctx.setLineDash([]);}
+      instrumentChartState={...state,min,max,left,right,top,bottom,width,height,xFor,yFor,markerMap};
+    }
+    function instrumentMarkerIndex(marker, points, period) {
+      if (!points.length) return -1;
+      const markerDate=String(marker.timestamp || '').slice(0,10), markerMonth=markerDate.slice(0,7);
+      const dayIndexes=points.map((point,index)=>String(point.time || '').slice(0,10)===markerDate?index:-1).filter(index=>index>=0);
+      if (['intraday','1m','5m','15m','30m','60m','five_day'].includes(period)) {
+        if (!dayIndexes.length) return -1;
+        const markerTime=new Date(marker.timestamp).getTime();
+        return dayIndexes.reduce((best,index)=>Math.abs(new Date(points[index].time).getTime()-markerTime)<Math.abs(new Date(points[best].time).getTime()-markerTime)?index:best,dayIndexes[0]);
+      }
+      if (period==='daily') return dayIndexes[0] ?? -1;
+      if (period==='weekly') {
+        if (!markerDate) return -1;
+        const monday=new Date(markerDate+'T00:00:00Z'), offset=(monday.getUTCDay()+6)%7;
+        monday.setUTCDate(monday.getUTCDate()-offset);
+        return points.findIndex(point=>String(point.time || '').slice(0,10)===monday.toISOString().slice(0,10));
+      }
+      if (period==='monthly') return points.findIndex(point=>String(point.time || '').slice(0,7)===markerMonth);
+      return -1;
+    }
+    function showInstrumentChartPoint(index,pointerX=null,pointerY=null) {
+      const state=instrumentChartState;if(!state?.points?.length)return;instrumentChartFocusIndex=Math.max(0,Math.min(index,state.points.length-1));drawInstrumentChart();
+      const point=state.points[instrumentChartFocusIndex], markers=instrumentChartState?.markerMap?.get(instrumentChartFocusIndex)||[], tooltip=document.getElementById('instrumentChartTooltip');
+      const rows=state.candles?'<div class="chart-tooltip-row"><span>开 / 高</span><b>'+fmtMoney(point.open)+' / '+fmtMoney(point.high)+'</b></div><div class="chart-tooltip-row"><span>低 / 收</span><b>'+fmtMoney(point.low)+' / '+fmtMoney(point.close)+'</b></div>':'<div class="chart-tooltip-row"><span>最新价</span><b>'+fmtMoney(point.close)+'</b></div>';
+      tooltip.innerHTML='<strong>'+escapeHtml(instrumentTimeLabel(point.time))+'</strong>'+rows+(markers.length?markers.map(marker=>'<div class="chart-tooltip-row"><span>'+escapeHtml(marker.direction)+'</span><b>'+escapeHtml(marker.summary)+'</b></div>').join(''):'' );tooltip.classList.add('visible');
+      const wrap=document.querySelector('.instrument-chart-wrap');tooltip.style.left=Math.max(8,Math.min(pointerX ?? Math.round(wrap.clientWidth*.64),wrap.clientWidth-205))+'px';tooltip.style.top=Math.max(8,Math.min(pointerY ?? 18,wrap.clientHeight-116))+'px';
+      announce(instrumentTimeLabel(point.time)+'，收 '+fmtMoney(point.close)+(markers.length?'；'+markers.map(item=>item.direction).join('、'):''));
+    }
+    function bindInstrumentChartInteractions() {
+      const canvas=document.getElementById('instrumentChart');
+      canvas.onpointermove=event=>{const rect=canvas.getBoundingClientRect(),x=event.clientX-rect.left,ratio=(x-56)/Math.max(1,rect.width-74);showInstrumentChartPoint(Math.round(ratio*((instrumentChartState?.points.length||1)-1)),x+8,event.clientY-rect.top+8);};
+      canvas.onpointerleave=()=>document.getElementById('instrumentChartTooltip').classList.remove('visible');
+      canvas.onkeydown=event=>{if(!instrumentChartState?.points.length)return;if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();showInstrumentChartPoint(instrumentChartFocusIndex+(event.key==='ArrowLeft'?-1:1));}if(event.key==='Home'){event.preventDefault();showInstrumentChartPoint(0);}if(event.key==='End'){event.preventDefault();showInstrumentChartPoint(instrumentChartState.points.length-1);}};
+      if(!instrumentChartObserver&&window.ResizeObserver){instrumentChartObserver=new ResizeObserver(()=>{if(!document.getElementById('instrumentDetailView').classList.contains('hidden'))drawInstrumentChart();});instrumentChartObserver.observe(canvas);}
     }
     function openInstrumentDrawer() { const drawer=document.getElementById('instrumentDrawerBackdrop'); drawer.classList.add('open'); drawer.setAttribute('aria-hidden','false'); document.body.classList.add('drawer-open'); window.setTimeout(()=>document.getElementById('instrumentSearchInput').focus(),120); }
     function closeInstrumentDrawer(event) { if (event && event.target !== document.getElementById('instrumentDrawerBackdrop')) return; const drawer=document.getElementById('instrumentDrawerBackdrop'); drawer.classList.remove('open'); drawer.setAttribute('aria-hidden','true'); document.body.classList.remove('drawer-open'); }
@@ -847,7 +1065,7 @@
       const button=document.getElementById('confirmSelectedBtn'); button.disabled=true;
       try { const response=await fetch('/api/backtests/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})}); if(!response.ok)throw new Error('确认失败'); const payload=await response.json(); latestData.backtest_runs=payload.backtest_runs || latestData.backtest_runs; latestData.pending_backtest_count=(latestData.backtest_runs || []).filter(item=>item.status!=='已确认').length; renderBacktests(latestData); renderAccount(latestData); announce('已确认 '+(payload.updated || ids.length)+' 条回测记录。'); } catch(error) { announce('回测确认失败，请重试。'); } finally { button.disabled=false; iconify(); }
     }
-    document.addEventListener('keydown',event=>{ if(event.key==='Escape') closeInstrumentDrawer(); });
+    document.addEventListener('keydown',event=>{ if(event.key!=='Escape')return; if(!document.getElementById('instrumentDetailView').classList.contains('hidden'))closeInstrumentDetail(); else closeInstrumentDrawer(); });
     bindTabs();
     iconify();
     const initialDashboardLoad = load();
