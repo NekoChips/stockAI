@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from stock_ai_agent.config import load_config
-from stock_ai_agent.models import Bar, Portfolio, Position
+from stock_ai_agent.models import Bar, Direction, Fill, Portfolio, Position, Quote
 from stock_ai_agent.storage.sqlite import SQLiteMarketDataStore
 from stock_ai_agent.web import (
     add_dashboard_watchlist_item,
@@ -18,6 +18,7 @@ from stock_ai_agent.web import (
     build_dashboard_performance_payload,
     build_dashboard_reports_payload,
     build_dashboard_report_payload,
+    build_instrument_detail_payload,
     confirm_backtest_runs,
     remove_dashboard_watchlist_item,
     render_dashboard_html,
@@ -27,6 +28,34 @@ from stock_ai_agent.web import (
 
 
 class WebDashboardTests(unittest.TestCase):
+    def test_instrument_detail_uses_persisted_ticks_bars_and_trade_markers(self):
+        config = load_config()
+        quote_time = date(2026, 8, 17)
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMarketDataStore(Path(tmp) / "detail.sqlite3")
+            store.save_bars([
+                Bar("588170.SH", date(2026, 8, day), Decimal("1"), Decimal("1.2"), Decimal("0.9"), Decimal("1.1") + Decimal(day) / Decimal("100"), Decimal("100"))
+                for day in range(3, 18)
+            ])
+            store.save_quotes([
+                Quote("588170.SH", "科创100ETF基金", __import__("datetime").datetime(2026, 8, 17, 9, 31), Decimal("1.21"), Decimal("1"), Decimal("1.22"), Decimal("1"), Decimal("1.2"), Decimal("1"), Decimal("1"), Decimal("1"), "mock", __import__("datetime").datetime(2026, 8, 17, 9, 31)),
+                Quote("588170.SH", "科创100ETF基金", __import__("datetime").datetime(2026, 8, 17, 9, 36), Decimal("1.25"), Decimal("1"), Decimal("1.26"), Decimal("1"), Decimal("1.2"), Decimal("1"), Decimal("1"), Decimal("2"), "mock", __import__("datetime").datetime(2026, 8, 17, 9, 36)),
+            ])
+            store.save_bars([
+                Bar("588170.SH", __import__("datetime").datetime(2026, 8, 14, 9, 31), Decimal("1"), Decimal("1.1"), Decimal("0.9"), Decimal("1.05"), Decimal("100")),
+                Bar("588170.SH", __import__("datetime").datetime(2026, 8, 14, 9, 32), Decimal("1.05"), Decimal("1.2"), Decimal("1"), Decimal("1.15"), Decimal("100")),
+            ], interval="minute", source="market_quotes")
+            store.record_fill(Fill("588170.SH", Direction.BUY, 1000, Decimal("1.22"), Decimal("1"), Decimal("0"), __import__("datetime").datetime(2026, 8, 17, 9, 35)))
+            payload = build_instrument_detail_payload(config, store, "588170.SH", as_of=quote_time)
+
+        self.assertEqual(payload["instrument"]["symbol"], "588170.SH")
+        self.assertEqual(len(payload["intraday"]["ticks"]), 2)
+        self.assertEqual(
+            [item["time"].date() for item in payload["five_day"]],
+            [date(2026, 8, 14), date(2026, 8, 14), date(2026, 8, 17), date(2026, 8, 17)],
+        )
+        self.assertEqual(len(payload["minute_bars"]["5m"]), 2)
+        self.assertEqual(payload["trade_markers"][0]["direction"], "买入")
     def test_send_compresses_large_response_when_client_accepts_gzip(self):
         class Writer:
             def __init__(self):
@@ -153,6 +182,7 @@ class WebDashboardTests(unittest.TestCase):
 
             store = CountingStore(Path(tmp) / "dashboard.sqlite3")
             store.save_portfolio(Portfolio(Decimal("990000"), {"588170.SH": Position("588170.SH", 10000, 10000, Decimal("1.00"), Decimal("1.10"))}))
+            store.save_quotes([Quote("588170.SH", "科创100ETF基金", date(2026, 8, 17), Decimal("1.10"), Decimal("1"), Decimal("1.11"), Decimal("0.99"), Decimal("1.08"), Decimal("1"), Decimal("1"), Decimal("1.85"), "mock", date(2026, 8, 17))])
             store.record_portfolio_snapshot(date(2026, 8, 17), store.load_portfolio(config.paper_account.initial_cash))
             store.record_backtest_run("momentum_grid", {"lookback_days": 5}, {"total_return": "0.05"}, "待人工确认")
             payload = build_dashboard_payload(config, store, as_of=date(2026, 8, 17))
@@ -160,6 +190,7 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("portfolio", payload)
         self.assertIn("period_returns", payload)
         self.assertIn("profit_leaderboard", payload)
+        self.assertEqual(payload["market_quotes"]["588170.SH"]["change_percent"], "1.85")
         self.assertIn("profit_calendar", payload)
         self.assertEqual(payload["equity_curve"][0]["day"], "2026-01-01")
         self.assertEqual(payload["profit_calendar"]["daily"][0]["period"], "2026-01-01")
@@ -246,6 +277,8 @@ class WebDashboardTests(unittest.TestCase):
         self.assertIn("/api/dashboard/calendar", html)
         self.assertIn("/api/dashboard/backtests", html)
         self.assertIn("/api/dashboard/reports", html)
+        self.assertIn("instrumentDetailView", html)
+        self.assertIn("/api/instruments/", html)
         self.assertNotIn("fetch('/api/dashboard' + performanceQuery())", html)
         self.assertIn("loadBacktests", html)
         self.assertIn("盈亏排行榜", html)

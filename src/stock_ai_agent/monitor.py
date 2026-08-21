@@ -91,6 +91,8 @@ class RealTimePaperTradingMonitor:
         self.timezone = ZoneInfo(config.timezone)
         self._reported_dates: set[date] = set()
         self._catalog_sync_attempted_dates: set[date] = set()
+        self._decision_compaction_attempted_dates: set[date] = set()
+        self._quote_prune_attempted_dates: set[date] = set()
         self._trading_data_ready = False
         self._initialization_warnings: list[str] = []
 
@@ -100,6 +102,8 @@ class RealTimePaperTradingMonitor:
         portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
 
         self._sync_daily_reference_data(trade_date)
+        self._compact_watch_decisions(trade_date)
+        self._prepare_intraday_quote_store(local_now)
 
         if self.config.monitor.settle_on_start:
             self.store.settle_t_plus_one(trade_date)
@@ -127,7 +131,7 @@ class RealTimePaperTradingMonitor:
             for instrument in universe.instruments
             if len(bars_by_symbol.get(instrument.symbol, [])) >= minimum_history_bars
         ]
-        symbols = [instrument.symbol for instrument in eligible_instruments]
+        symbols = [instrument.symbol for instrument in universe.instruments]
         batch_quotes = None
         batch_requested = bool(symbols and hasattr(self.quote_provider, "get_quotes"))
         if batch_requested:
@@ -135,6 +139,8 @@ class RealTimePaperTradingMonitor:
                 batch_quotes = fetch_quotes(self.quote_provider, symbols)
             except Exception as exc:  # noqa: BLE001 - fallback provider errors are isolated from the loop
                 warnings.extend([f"{symbol} 实时行情获取失败：{exc}" for symbol in symbols])
+        if batch_quotes and hasattr(self.store, "save_quotes"):
+            self.store.save_quotes(list(batch_quotes.values()))
 
         for instrument in universe.instruments:
             bars = bars_by_symbol.get(instrument.symbol, [])
@@ -156,6 +162,8 @@ class RealTimePaperTradingMonitor:
                 except Exception as exc:  # noqa: BLE001 - provider errors must not stop the monitor loop
                     warnings.append(f"{instrument.symbol} 实时行情获取失败：{exc}")
                     continue
+                if hasattr(self.store, "save_quotes"):
+                    self.store.save_quotes([quote])
             if instrument.symbol in portfolio.positions:
                 portfolio.positions[instrument.symbol].last_price = quote.latest_price
             try:
@@ -322,6 +330,22 @@ class RealTimePaperTradingMonitor:
             return
         self._catalog_sync_attempted_dates.add(trade_date)
         Thread(target=self._sync_catalog_in_background, args=(trade_date,), daemon=True).start()
+
+    def _compact_watch_decisions(self, trade_date: date) -> None:
+        if trade_date in self._decision_compaction_attempted_dates:
+            return
+        self._decision_compaction_attempted_dates.add(trade_date)
+        if hasattr(self.store, "compact_watch_decisions"):
+            self.store.compact_watch_decisions()
+
+    def _prepare_intraday_quote_store(self, local_now: datetime) -> None:
+        """Discard the previous trading day's snapshots before a new A-share session."""
+        trade_date = local_now.date()
+        if local_now.weekday() >= 5 or trade_date in self._quote_prune_attempted_dates:
+            return
+        self._quote_prune_attempted_dates.add(trade_date)
+        if hasattr(self.store, "prune_market_quotes"):
+            self.store.prune_market_quotes(trade_date)
 
     def _sync_catalog_in_background(self, trade_date: date) -> None:
         if hasattr(self.quote_provider, "list_instruments"):

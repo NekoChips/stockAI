@@ -19,6 +19,7 @@ from .analytics import (
     fill_daily_snapshots,
 )
 from .config import AppConfig
+from .instrument_detail import build_instrument_detail_payload
 from .universe import infer_asset_type, validate_hs_symbol
 from .watchlist import add_watchlist_item, effective_watchlist, remove_watchlist_item
 
@@ -82,6 +83,11 @@ def build_dashboard_overview_payload(
         for item in watchlist
     ]
     names = {item.symbol: item.name for item in watchlist}
+    latest_quotes = (
+        store.load_latest_quotes([item.symbol for item in watchlist])
+        if hasattr(store, "load_latest_quotes")
+        else {}
+    )
     all_fills = store.load_all_fills() if hasattr(store, "load_all_fills") else []
     backtest_runs = store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else []
     period_returns = compute_period_returns(snapshots)
@@ -99,6 +105,7 @@ def build_dashboard_overview_payload(
             "daily_return": daily_returns[-1].return_rate if daily_returns else 0,
             "profit_leaderboard": build_profit_leaderboard(portfolio, all_fills, names, as_of=as_of),
             "watchlist": watchlist_rows,
+            "market_quotes": latest_quotes,
             "pending_backtest_count": sum(item.get("status") != "已确认" for item in backtest_runs),
         }
     )
@@ -311,6 +318,16 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 return
             if request.path == "/api/dashboard/backtests":
                 payload = build_dashboard_backtests_payload(store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            instrument_prefix = "/api/instruments/"
+            if request.path.startswith(instrument_prefix) and request.path.endswith("/detail"):
+                symbol = unquote(request.path[len(instrument_prefix):-len("/detail")]).rstrip("/")
+                try:
+                    payload = _to_jsonable(build_instrument_detail_payload(config, store, symbol))
+                except ValueError as exc:
+                    _send_error(self, 400, str(exc))
+                    return
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             if request.path == "/api/dashboard/reports":

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import List, Protocol
 
-from ..models import Bar
+from ..models import Bar, Quote
 
 
 class MarketDataStore(Protocol):
@@ -14,6 +14,21 @@ class MarketDataStore(Protocol):
         ...
 
     def load_bars(self, symbol: str, interval: str = "daily", limit: int | None = None) -> List[Bar]:
+        ...
+
+    def save_quotes(self, quotes: List[Quote]) -> int:
+        ...
+
+    def load_latest_quotes(self, symbols: list[str] | None = None) -> dict[str, dict]:
+        ...
+
+    def load_quote_ticks(self, symbol: str, trade_date: date) -> list[dict]:
+        ...
+
+    def prune_market_quotes(self, trade_date: date) -> int:
+        ...
+
+    def compact_watch_decisions(self) -> int:
         ...
 
     def load_watchlist_items(self) -> list[dict[str, str]]:
