@@ -4,7 +4,7 @@ import time
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import date, datetime, time as clock_time
+from datetime import date, datetime, time as clock_time, timedelta
 from decimal import Decimal
 from threading import Thread
 from typing import Callable, List, Optional, Protocol
@@ -17,17 +17,11 @@ from .history_sync import missing_history_range, previous_weekday
 from .journal import build_daily_report
 from .models import Bar, Decision, Fill, Portfolio
 from .paper_broker import PaperBroker, PaperBrokerError
-from .quant_strategies import (
-    DrawdownControlStrategy,
-    MeanReversionStrategy,
-    QuantContext,
-    RelativeStrengthRotationStrategy,
-    TimeSeriesMomentumStrategy,
-    VolatilityTargetStrategy,
-)
+from .quant_strategies import QuantContext
 from .risk import RiskEngine
 from .reference_data import sync_benchmark_history, sync_instrument_catalog
-from .strategy import StrategyContext, TechnicalCompositeStrategy, aggregate_signals
+from .strategy import StrategyContext, aggregate_signals
+from .strategy_runtime import evaluate_strategy_profile, resolve_strategy_profile
 from .trading_calendar import AShareTradingCalendar
 from .universe import Universe
 from .watchlist import effective_watchlist
@@ -124,7 +118,9 @@ class RealTimePaperTradingMonitor:
         self._quote_prune_attempted_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
         self._trading_data_ready = False
         self._initialization_warnings: list[str] = []
-        calendar = AShareTradingCalendar() if config.environment == "release" else None
+        if hasattr(store, "ensure_strategy_defaults"):
+            store.ensure_strategy_defaults(config)
+        calendar = AShareTradingCalendar(store) if config.environment == "release" else None
         self._is_trading_day = trading_day_checker or (calendar.is_trading_day if calendar else lambda value: value.weekday() < 5)
 
     def run_iteration(self, now: datetime | None = None, ignore_market_hours: bool = False) -> MonitorIterationResult:
@@ -212,15 +208,16 @@ class RealTimePaperTradingMonitor:
                 peak_values={instrument.symbol: max(historical_peak, current_value)},
                 current_values={instrument.symbol: current_value},
             )
-            signals = [
-                TechnicalCompositeStrategy(self.config.strategy.technical).evaluate(features, strategy_context),
-                TimeSeriesMomentumStrategy(self.config.strategy.quant.get("lookback_days", 20)).evaluate(instrument.symbol, features, quant_context),
-                MeanReversionStrategy(Decimal(str(self.config.strategy.quant.get("mean_reversion_z", "-1.2")))).evaluate(instrument.symbol, features, quant_context),
-                RelativeStrengthRotationStrategy(self.config.strategy.quant.get("lookback_days", 20)).evaluate(instrument.symbol, features, quant_context),
-                VolatilityTargetStrategy(self.config.risk.high_atr_ratio).evaluate(instrument.symbol, features, quant_context),
-                DrawdownControlStrategy(Decimal(str(self.config.strategy.quant.get("drawdown_stop", "0.08")))).evaluate(instrument.symbol, features, quant_context),
-            ]
-            aggregate = aggregate_signals(signals, self.config.strategy.weights, self.config.strategy.aggregator)
+            profile = resolve_strategy_profile(self.config, self.store, instrument.symbol, instrument.asset_type)
+            signals = evaluate_strategy_profile(
+                profile,
+                instrument.symbol,
+                features,
+                strategy_context,
+                quant_context,
+                self.config.risk.high_atr_ratio,
+            )
+            aggregate = aggregate_signals(signals, profile["weights"], profile["aggregator"])
             risk_result = risk.evaluate(aggregate, portfolio, quote, daily_trade_count=daily_trade_count)
             decisions.append(risk_result.decision)
             self.store.record_decision(risk_result.decision, trade_date)
@@ -344,9 +341,35 @@ class RealTimePaperTradingMonitor:
                 iteration += 1
                 if max_iterations is not None and iteration >= max_iterations:
                     break
-                sleep_fn(float(self.config.monitor.poll_seconds))
+                sleep_fn(self._sleep_seconds(local_now))
         finally:
             self.store.release_monitor_lock()
+
+    def _sleep_seconds(self, now: datetime) -> float:
+        """Sleep until the next market or post-close boundary."""
+        if not self.config.monitor.respect_market_hours:
+            return float(self.config.monitor.poll_seconds)
+        if is_trading_time(now, self._is_trading_day):
+            return float(self.config.monitor.poll_seconds)
+        local_time = now.timetz().replace(tzinfo=None)
+        if self._is_trading_day(now.date()):
+            if local_time < clock_time(9, 30):
+                target = datetime.combine(now.date(), clock_time(9, 30), tzinfo=now.tzinfo)
+            elif local_time < clock_time(13, 0):
+                target = datetime.combine(now.date(), clock_time(13, 0), tzinfo=now.tzinfo)
+            elif local_time < clock_time(15, 5):
+                target = datetime.combine(now.date(), clock_time(15, 5), tzinfo=now.tzinfo)
+            else:
+                target = self._next_trading_open(now.date(), now.tzinfo)
+        else:
+            target = self._next_trading_open(now.date(), now.tzinfo)
+        return max(1.0, (target - now).total_seconds())
+
+    def _next_trading_open(self, current: date, timezone) -> datetime:
+        candidate = current + timedelta(days=1)
+        while not self._is_trading_day(candidate):
+            candidate += timedelta(days=1)
+        return datetime.combine(candidate, clock_time(9, 30), tzinfo=timezone)
 
     def _local_now(self, now: datetime | None = None) -> datetime:
         current = now or datetime.now(self.timezone)

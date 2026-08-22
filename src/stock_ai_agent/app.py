@@ -21,20 +21,14 @@ from .learning import propose_parameter_changes, summarize_learning
 from .models import Bar, Decision, Fill, Portfolio
 from .monitor import RealTimePaperTradingMonitor
 from .paper_broker import PaperBroker, PaperBrokerError
-from .quant_strategies import (
-    DrawdownControlStrategy,
-    MeanReversionStrategy,
-    QuantContext,
-    RelativeStrengthRotationStrategy,
-    TimeSeriesMomentumStrategy,
-    VolatilityTargetStrategy,
-)
+from .quant_strategies import QuantContext
 from .risk import RiskEngine
 from .reference_data import sync_benchmark_history, sync_instrument_catalog
 from .storage.base import MarketDataStore
 from .storage.mock import MockMarketDataStore
 from .storage.mysql import MySQLMarketDataStore
-from .strategy import StrategyContext, TechnicalCompositeStrategy, aggregate_signals
+from .strategy import StrategyContext, aggregate_signals
+from .strategy_runtime import evaluate_strategy_profile, profile_from_config
 from .universe import Universe
 from .web import serve_dashboard
 from .watchlist import effective_watchlist
@@ -114,15 +108,16 @@ def run_once(
             peak_values={instrument.symbol: max(config.paper_account.initial_cash, current_value)},
             current_values={instrument.symbol: current_value},
         )
-        signals = [
-            TechnicalCompositeStrategy(config.strategy.technical).evaluate(features, strategy_context),
-            TimeSeriesMomentumStrategy(config.strategy.quant.get("lookback_days", 20)).evaluate(instrument.symbol, features, quant_context),
-            MeanReversionStrategy(Decimal(str(config.strategy.quant.get("mean_reversion_z", "-1.2")))).evaluate(instrument.symbol, features, quant_context),
-            RelativeStrengthRotationStrategy(config.strategy.quant.get("lookback_days", 20)).evaluate(instrument.symbol, features, quant_context),
-            VolatilityTargetStrategy(config.risk.high_atr_ratio).evaluate(instrument.symbol, features, quant_context),
-            DrawdownControlStrategy(Decimal(str(config.strategy.quant.get("drawdown_stop", "0.08")))).evaluate(instrument.symbol, features, quant_context),
-        ]
-        aggregate = aggregate_signals(signals, config.strategy.weights, config.strategy.aggregator)
+        profile = profile_from_config(config)
+        signals = evaluate_strategy_profile(
+            profile,
+            instrument.symbol,
+            features,
+            strategy_context,
+            quant_context,
+            config.risk.high_atr_ratio,
+        )
+        aggregate = aggregate_signals(signals, profile["weights"], profile["aggregator"])
         risk_result = risk.evaluate(aggregate, portfolio, quote, daily_trade_count=len(fills))
         decisions.append(risk_result.decision)
         if risk_result.order:
