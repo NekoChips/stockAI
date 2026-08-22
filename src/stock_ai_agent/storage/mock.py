@@ -12,6 +12,8 @@ from datetime import date, datetime, time
 from decimal import Decimal
 
 from ..models import Bar, Decision, Direction, Fill, Portfolio, Position, Quote
+from ..strategy_catalog import strategy_definitions
+from ..strategy_runtime import profile_from_config
 from .mysql import _quote_ticks_to_minute_bars
 
 
@@ -30,6 +32,11 @@ class MockMarketDataStore:
         self._backtests: list[dict] = []
         self._reports: dict[str, dict] = {}
         self._last_settle_date: date | None = None
+        self._trading_calendar: dict[int, dict[date, bool]] = {}
+        self._strategy_definitions: list[dict] = []
+        self._strategy_profiles: dict[str, dict] = {}
+        self._strategy_drafts: dict[str, dict] = {}
+        self._strategy_changes: list[dict] = []
 
     def initialize(self) -> None:
         return None
@@ -209,6 +216,83 @@ class MockMarketDataStore:
     def load_daily_report(self, report_date: date | str) -> dict | None:
         value = self._reports.get(report_date.isoformat() if isinstance(report_date, date) else str(report_date))
         return deepcopy(value) if value else None
+
+    def load_trading_calendar(self, year: int) -> dict[date, bool] | None:
+        rows = self._trading_calendar.get(int(year))
+        return deepcopy(rows) if rows is not None else None
+
+    def save_trading_calendar(self, year: int, trading_days: set[date], source: str, covered_until: date | None = None) -> int:
+        from datetime import timedelta
+
+        start = date(int(year), 1, 1)
+        end = covered_until or date(int(year), 12, 31)
+        total = (end - start).days + 1
+        self._trading_calendar[int(year)] = {
+            start + timedelta(days=index): start + timedelta(days=index) in trading_days
+            for index in range(total)
+        }
+        return total
+
+    def ensure_strategy_defaults(self, config) -> None:
+        if not self._strategy_definitions:
+            self._strategy_definitions = strategy_definitions()
+        if "default" not in self._strategy_profiles:
+            self._strategy_profiles["default"] = profile_from_config(config)
+
+    def load_active_strategy_profile(self, symbol: str, asset_type: str) -> dict | None:
+        for profile in self._strategy_profiles.values():
+            if profile.get("status") == "active" and profile.get("scope_type") == "symbol" and profile.get("scope_value") == symbol:
+                return deepcopy(profile)
+        for profile in self._strategy_profiles.values():
+            if profile.get("status") == "active" and profile.get("scope_type") == "asset_type" and profile.get("scope_value") == asset_type:
+                return deepcopy(profile)
+        profile = self._strategy_profiles.get("default")
+        if profile and profile.get("status") == "active":
+            return deepcopy(profile)
+        return None
+
+    def load_strategy_center(self, config) -> dict:
+        self.ensure_strategy_defaults(config)
+        profiles = []
+        for profile_id, profile in self._strategy_profiles.items():
+            draft = self._strategy_drafts.get(profile_id)
+            if draft:
+                item = deepcopy(draft)
+                item.update({"active_revision": profile.get("revision"), "pending_confirmation": True})
+                profiles.append(item)
+            else:
+                profiles.append(deepcopy(profile))
+        for profile_id, profile in self._strategy_drafts.items():
+            if profile_id not in self._strategy_profiles:
+                profiles.append(deepcopy(profile))
+        return {
+            "definitions": deepcopy(self._strategy_definitions),
+            "profiles": profiles,
+            "changes": deepcopy(self._strategy_changes[-50:]),
+        }
+
+    def save_strategy_profile(self, profile: dict, operator: str = "web") -> dict:
+        profile_id = str(profile.get("profile_id") or profile.get("scope_value") or "default")
+        previous = deepcopy(self._strategy_profiles.get(profile_id))
+        saved = deepcopy(profile)
+        saved.update({"profile_id": profile_id, "status": "draft", "revision": int((previous or {}).get("revision", 0)) + 1})
+        if previous and previous.get("status") == "active":
+            self._strategy_drafts[profile_id] = saved
+        else:
+            self._strategy_profiles[profile_id] = saved
+        self._strategy_changes.append({"profile_id": profile_id, "action": "save", "operator": operator, "before": previous, "after": deepcopy(saved), "created_at": datetime.now().isoformat()})
+        return deepcopy(saved)
+
+    def confirm_strategy_profile(self, profile_id: str, operator: str = "web") -> dict:
+        key = str(profile_id)
+        profile = self._strategy_drafts.pop(key, None) or self._strategy_profiles.get(key)
+        if not profile:
+            raise ValueError("策略组合不存在。")
+        previous = deepcopy(profile)
+        profile["status"] = "active"
+        self._strategy_profiles[key] = profile
+        self._strategy_changes.append({"profile_id": str(profile_id), "action": "confirm", "operator": operator, "before": previous, "after": deepcopy(profile), "created_at": datetime.now().isoformat()})
+        return deepcopy(profile)
 
     def settle_t_plus_one(self, settle_date: date | None = None) -> bool:
         if settle_date and self._last_settle_date == settle_date:

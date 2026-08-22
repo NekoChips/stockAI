@@ -81,6 +81,29 @@ class MonitorTests(unittest.TestCase):
         self.assertFalse(is_trading_time(holiday, lambda value: False))
         self.assertFalse(is_post_close_report_time(holiday.replace(hour=15, minute=5), "15:05", lambda value: False))
 
+    def test_non_trading_hours_sleep_until_next_market_boundary(self):
+        config = load_config()
+        tz = ZoneInfo("Asia/Shanghai")
+        monitor = RealTimePaperTradingMonitor(config, MockMarketDataStore(), MockQuoteProvider())
+
+        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 8, 0, tzinfo=tz)), 5400)
+        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 12, 0, tzinfo=tz)), 3600)
+        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 15, 10, tzinfo=tz)), 18 * 60 * 60 + 20 * 60)
+
+    def test_non_trading_day_sleep_skips_to_next_trading_day(self):
+        config = load_config()
+        tz = ZoneInfo("Asia/Shanghai")
+        monitor = RealTimePaperTradingMonitor(
+            config,
+            MockMarketDataStore(),
+            MockQuoteProvider(),
+            trading_day_checker=lambda value: value.weekday() < 5 and value != date(2026, 8, 18),
+        )
+
+        seconds = monitor._sleep_seconds(datetime(2026, 8, 17, 15, 30, tzinfo=tz))
+
+        self.assertEqual(seconds, 42 * 60 * 60)
+
     def test_iteration_executes_and_persists_paper_fill(self):
         config = load_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))

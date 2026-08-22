@@ -68,6 +68,31 @@ class MySQLStorageTests(unittest.TestCase):
 
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS daily_reports" in statement for statement in statements))
 
+    def test_schema_contains_calendar_and_strategy_tables(self):
+        store = MySQLMarketDataStore(
+            MySQLConnectionConfig(host="127.0.0.1", port=3306, database="stock_ai", username="agent", password="secret")
+        )
+        statements = []
+
+        class Cursor:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, traceback): return False
+            def execute(self, statement): statements.append(statement)
+
+        class Connection:
+            def cursor(self): return Cursor()
+
+        @contextmanager
+        def fake_connect():
+            yield Connection()
+
+        store._connect = fake_connect
+        store.initialize()
+
+        self.assertTrue(any("CREATE TABLE IF NOT EXISTS trading_calendar" in statement for statement in statements))
+        self.assertTrue(any("CREATE TABLE IF NOT EXISTS strategy_profiles" in statement for statement in statements))
+        self.assertTrue(any("CREATE TABLE IF NOT EXISTS strategy_change_log" in statement for statement in statements))
+
     def test_daily_report_methods_preserve_summary_and_detail_contract(self):
         store = MySQLMarketDataStore(
             MySQLConnectionConfig(host="127.0.0.1", port=3306, database="stock_ai", username="stock_agent", password="secret")

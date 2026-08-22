@@ -9,6 +9,7 @@ from .universe import infer_asset_type, validate_hs_symbol
 from .watchlist import add_watchlist_item, effective_watchlist, remove_watchlist_item
 from .web_support import _DASHBOARD_CACHE, _to_jsonable
 from .web_dashboard import build_dashboard_overview_payload
+from .web_dashboard import build_dashboard_strategies_payload
 
 
 def confirm_backtest_runs(config: AppConfig, store, run_ids: list[int]) -> dict[str, Any]:
@@ -79,6 +80,42 @@ def remove_dashboard_watchlist_item(config: AppConfig, store, symbol: str) -> di
     overview = build_dashboard_overview_payload(config, store)
     return _to_jsonable({"removed": removed, "watchlist": overview["watchlist"], "dashboard": overview})
 
+
+def save_dashboard_strategy_profile(config: AppConfig, store, payload: dict[str, Any]) -> dict[str, Any]:
+    if not hasattr(store, "save_strategy_profile"):
+        raise ValueError("当前存储适配器不支持策略持久化。")
+    profile = dict(payload)
+    profile_id = str(profile.get("profile_id") or profile.get("scope_value") or "").strip()
+    if not profile_id:
+        raise ValueError("策略组合必须提供 profile_id。")
+    enabled = [str(item) for item in profile.get("enabled", []) if str(item)]
+    weights = {str(key): str(value) for key, value in dict(profile.get("weights") or {}).items()}
+    for value in weights.values():
+        try:
+            if float(value) < 0:
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise ValueError("策略权重必须是非负数字。") from exc
+    profile.update({
+        "profile_id": profile_id,
+        "enabled": enabled,
+        "weights": weights,
+        "technical": dict(profile.get("technical") or {}),
+        "quant": dict(profile.get("quant") or {}),
+        "aggregator": dict(profile.get("aggregator") or {}),
+    })
+    store.ensure_strategy_defaults(config) if hasattr(store, "ensure_strategy_defaults") else None
+    store.save_strategy_profile(profile)
+    _DASHBOARD_CACHE.invalidate_store(id(store))
+    return build_dashboard_strategies_payload(config, store)
+
+
+def confirm_dashboard_strategy_profile(config: AppConfig, store, profile_id: str) -> dict[str, Any]:
+    if not hasattr(store, "confirm_strategy_profile"):
+        raise ValueError("当前存储适配器不支持策略持久化。")
+    store.confirm_strategy_profile(profile_id)
+    _DASHBOARD_CACHE.invalidate_store(id(store))
+    return build_dashboard_strategies_payload(config, store)
 
 
 

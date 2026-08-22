@@ -10,6 +10,8 @@ from typing import Iterator, List
 
 from ..config import MySQLConnectionConfig
 from ..models import Bar, Decision, Direction, Fill, Portfolio, Position, Quote, StrategySignal
+from ..strategy_catalog import strategy_definitions
+from ..strategy_runtime import profile_from_config
 
 
 class MySQLMarketDataStore:
@@ -154,12 +156,37 @@ class MySQLMarketDataStore:
                 report_data LONGTEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
+            """CREATE TABLE IF NOT EXISTS trading_calendar (
+                trade_date DATE PRIMARY KEY, is_trading_day TINYINT NOT NULL,
+                source VARCHAR(64) NOT NULL, synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_trading_calendar_flag (is_trading_day, trade_date)
+            ) CHARACTER SET utf8mb4""",
+            """CREATE TABLE IF NOT EXISTS strategy_definitions (
+                strategy_id VARCHAR(128) PRIMARY KEY, name_zh VARCHAR(128) NOT NULL, name_en VARCHAR(128) NOT NULL,
+                category_zh VARCHAR(64) NOT NULL, category_en VARCHAR(64) NOT NULL,
+                description_zh TEXT NOT NULL, description_en TEXT NOT NULL,
+                enabled TINYINT NOT NULL DEFAULT 1, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) CHARACTER SET utf8mb4""",
+            """CREATE TABLE IF NOT EXISTS strategy_profiles (
+                profile_id VARCHAR(128) PRIMARY KEY, name_zh VARCHAR(128) NOT NULL, name_en VARCHAR(128) NOT NULL,
+                scope_type VARCHAR(32) NOT NULL, scope_value VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL,
+                revision INT NOT NULL, profile_data LONGTEXT NOT NULL, draft_data LONGTEXT NULL, draft_revision INT NULL,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_strategy_profiles_scope (scope_type, scope_value, status)
+            ) CHARACTER SET utf8mb4""",
+            """CREATE TABLE IF NOT EXISTS strategy_change_log (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY, profile_id VARCHAR(128) NOT NULL, action VARCHAR(32) NOT NULL,
+                operator_name VARCHAR(128) NOT NULL, before_data LONGTEXT, after_data LONGTEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_strategy_change_log_profile (profile_id, created_at)
+            ) CHARACTER SET utf8mb4""",
         ]
         with self._connect() as conn:
             with conn.cursor() as cursor:
                 for statement in statements:
                     cursor.execute(statement)
                 self._migrate_market_quotes(cursor)
+                self._migrate_strategy_profiles(cursor)
 
     @staticmethod
     def _migrate_market_quotes(cursor) -> None:
@@ -184,6 +211,18 @@ class MySQLMarketDataStore:
             cursor.execute("UPDATE market_quotes SET observed_at=quoted_at WHERE observed_at='' ")
         cursor.execute("ALTER TABLE market_quotes ADD UNIQUE KEY uq_market_quotes_tick (trade_date, symbol, observed_at)")
         cursor.execute("ALTER TABLE market_quotes ADD INDEX idx_market_quotes_latest (symbol, trade_date, observed_at)")
+
+    @staticmethod
+    def _migrate_strategy_profiles(cursor) -> None:
+        try:
+            cursor.execute("SHOW COLUMNS FROM strategy_profiles")
+            columns = {row[0] for row in cursor.fetchall()}
+        except AttributeError:
+            return
+        if "draft_data" not in columns:
+            cursor.execute("ALTER TABLE strategy_profiles ADD COLUMN draft_data LONGTEXT NULL AFTER profile_data")
+        if "draft_revision" not in columns:
+            cursor.execute("ALTER TABLE strategy_profiles ADD COLUMN draft_revision INT NULL AFTER draft_data")
 
     def save_bars(self, bars: List[Bar], interval: str = "daily", source: str = "unknown") -> int:
         if not bars:
@@ -527,6 +566,133 @@ class MySQLMarketDataStore:
         key = report_date.isoformat() if isinstance(report_date, date) else str(report_date)
         row = self._fetchone("SELECT report_data FROM daily_reports WHERE report_date=%s", (key,))
         return json.loads(row[0]) if row else None
+
+    def load_trading_calendar(self, year: int) -> dict[date, bool] | None:
+        self.initialize()
+        rows = self._fetchall(
+            "SELECT trade_date, is_trading_day FROM trading_calendar WHERE trade_date >= %s AND trade_date < %s ORDER BY trade_date",
+            (f"{int(year):04d}-01-01", f"{int(year) + 1:04d}-01-01"),
+        )
+        if not rows:
+            return None
+        return {_as_date(row[0]): bool(row[1]) for row in rows}
+
+    def save_trading_calendar(self, year: int, trading_days: set[date], source: str, covered_until: date | None = None) -> int:
+        self.initialize()
+        start = date(int(year), 1, 1)
+        end = covered_until or date(int(year), 12, 31)
+        total = (end - start).days + 1
+        from datetime import timedelta
+
+        rows = [
+            ((start + timedelta(days=index)).isoformat(), int((start + timedelta(days=index)) in trading_days), source)
+            for index in range(total)
+        ]
+        self._executemany(
+            "INSERT INTO trading_calendar (trade_date, is_trading_day, source) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE is_trading_day=VALUES(is_trading_day), source=VALUES(source), synced_at=CURRENT_TIMESTAMP",
+            rows,
+        )
+        return total
+
+    def ensure_strategy_defaults(self, config) -> None:
+        self.initialize()
+        definitions = strategy_definitions()
+        self._executemany(
+            "INSERT IGNORE INTO strategy_definitions (strategy_id, name_zh, name_en, category_zh, category_en, description_zh, description_en) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            [
+                (item["strategy_id"], item["name_zh"], item["name_en"], item["category_zh"], item["category_en"], item["description_zh"], item["description_en"])
+                for item in definitions
+            ],
+        )
+        if self._fetchone("SELECT profile_id FROM strategy_profiles WHERE profile_id=%s", ("default",)):
+            return
+        profile = profile_from_config(config)
+        self._execute(
+            "INSERT INTO strategy_profiles (profile_id, name_zh, name_en, scope_type, scope_value, status, revision, profile_data) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            ("default", profile["name_zh"], profile["name_en"], "default", "", "active", 1, _dumps_obj(profile)),
+        )
+
+    def load_active_strategy_profile(self, symbol: str, asset_type: str) -> dict | None:
+        self.initialize()
+        for scope_type, scope_value in (("symbol", symbol), ("asset_type", asset_type), ("default", "")):
+            row = self._fetchone("SELECT profile_data FROM strategy_profiles WHERE scope_type=%s AND scope_value=%s AND status=%s ORDER BY revision DESC LIMIT 1", (scope_type, scope_value, "active"))
+            if row:
+                return json.loads(row[0])
+        return None
+
+    def load_strategy_center(self, config) -> dict:
+        self.ensure_strategy_defaults(config)
+        definitions = self._fetchall("SELECT strategy_id, name_zh, name_en, category_zh, category_en, description_zh, description_en, enabled FROM strategy_definitions ORDER BY strategy_id")
+        profiles = self._fetchall(
+            "SELECT profile_id, profile_data, status, revision, updated_at, draft_data, draft_revision "
+            "FROM strategy_profiles ORDER BY profile_id"
+        )
+        changes = self._fetchall("SELECT id, profile_id, action, operator_name, before_data, after_data, created_at FROM strategy_change_log ORDER BY id DESC LIMIT 50")
+        profile_rows = []
+        for row in profiles:
+            profile = json.loads(row[1])
+            if row[5]:
+                profile = json.loads(row[5])
+                profile.update(
+                    {
+                        "status": "draft",
+                        "revision": row[6] or profile.get("revision") or 1,
+                        "active_revision": row[3],
+                        "pending_confirmation": True,
+                    }
+                )
+            else:
+                profile.update({"status": row[2], "revision": row[3]})
+            profile.update(
+                {
+                    "profile_id": row[0],
+                    "updated_at": row[4].isoformat() if hasattr(row[4], "isoformat") else str(row[4]),
+                }
+            )
+            profile_rows.append(profile)
+        return {
+            "definitions": [dict(zip(("strategy_id", "name_zh", "name_en", "category_zh", "category_en", "description_zh", "description_en", "enabled"), row)) for row in definitions],
+            "profiles": profile_rows,
+            "changes": [{"id": row[0], "profile_id": row[1], "action": row[2], "operator": row[3], "before": json.loads(row[4]) if row[4] else None, "after": json.loads(row[5]) if row[5] else None, "created_at": row[6].isoformat() if hasattr(row[6], "isoformat") else str(row[6])} for row in changes],
+        }
+
+    def save_strategy_profile(self, profile: dict, operator: str = "web") -> dict:
+        self.initialize()
+        profile_id = str(profile.get("profile_id") or profile.get("scope_value") or "default")
+        previous_row = self._fetchone("SELECT profile_data, revision, status FROM strategy_profiles WHERE profile_id=%s", (profile_id,))
+        previous = json.loads(previous_row[0]) if previous_row else None
+        revision = int(previous_row[1]) + 1 if previous_row else 1
+        saved = dict(profile)
+        saved.update({"profile_id": profile_id, "status": "draft", "revision": revision})
+        if previous_row and previous_row[2] == "active":
+            self._execute(
+                "UPDATE strategy_profiles SET draft_data=%s, draft_revision=%s, updated_at=CURRENT_TIMESTAMP WHERE profile_id=%s",
+                (_dumps_obj(saved), revision, profile_id),
+            )
+        else:
+            self._execute(
+                "INSERT INTO strategy_profiles (profile_id, name_zh, name_en, scope_type, scope_value, status, revision, profile_data) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE name_zh=VALUES(name_zh), name_en=VALUES(name_en), scope_type=VALUES(scope_type), scope_value=VALUES(scope_value), status=VALUES(status), revision=VALUES(revision), profile_data=VALUES(profile_data), updated_at=CURRENT_TIMESTAMP",
+                (profile_id, str(saved.get("name_zh") or profile_id), str(saved.get("name_en") or profile_id), str(saved.get("scope_type") or "symbol"), str(saved.get("scope_value") or profile_id), "draft", revision, _dumps_obj(saved)),
+            )
+        self._execute(
+            "INSERT INTO strategy_change_log (profile_id, action, operator_name, before_data, after_data) VALUES (%s, %s, %s, %s, %s)",
+            (profile_id, "save", operator, _dumps_obj(previous) if previous else None, _dumps_obj(saved)),
+        )
+        return saved
+
+    def confirm_strategy_profile(self, profile_id: str, operator: str = "web") -> dict:
+        self.initialize()
+        row = self._fetchone("SELECT profile_data, status, draft_data, draft_revision FROM strategy_profiles WHERE profile_id=%s", (str(profile_id),))
+        if not row:
+            raise ValueError("策略组合不存在。")
+        before = json.loads(row[0])
+        profile = json.loads(row[2]) if row[2] else before
+        profile["status"] = "active"
+        revision = int(row[3] or (profile.get("revision") or 1))
+        profile["revision"] = revision
+        self._execute("UPDATE strategy_profiles SET status=%s, revision=%s, profile_data=%s, draft_data=NULL, draft_revision=NULL, updated_at=CURRENT_TIMESTAMP WHERE profile_id=%s", ("active", revision, _dumps_obj(profile), str(profile_id)))
+        self._execute("INSERT INTO strategy_change_log (profile_id, action, operator_name, before_data, after_data) VALUES (%s, %s, %s, %s, %s)", (str(profile_id), "confirm", operator, _dumps_obj(before), _dumps_obj(profile)))
+        return profile
 
     def settle_t_plus_one(self, settle_date: date | None = None) -> bool:
         self.initialize()
