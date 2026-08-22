@@ -25,9 +25,37 @@ from stock_ai_agent.web import (
     search_watchlist_instruments,
     _send,
 )
+from stock_ai_agent.web_actions import confirm_dashboard_strategy_profile, save_dashboard_strategy_profile
+from stock_ai_agent.web_dashboard import build_dashboard_strategies_payload
 
 
 class WebDashboardTests(unittest.TestCase):
+    def test_strategy_center_persists_draft_and_confirmation(self):
+        config = load_config()
+        store = SQLiteMarketDataStore()
+
+        saved = save_dashboard_strategy_profile(
+            config,
+            store,
+            {
+                "profile_id": "588170.SH",
+                "name_zh": "科创100组合",
+                "name_en": "STAR 100 Profile",
+                "scope_type": "symbol",
+                "scope_value": "588170.SH",
+                "enabled": ["mean_reversion"],
+                "weights": {"mean_reversion": "1"},
+            },
+        )
+
+        self.assertEqual(saved["strategies"]["profiles"][-1]["status"], "draft")
+        confirmed = confirm_dashboard_strategy_profile(config, store, "588170.SH")
+        self.assertEqual(
+            next(item for item in confirmed["strategies"]["profiles"] if item["profile_id"] == "588170.SH")["status"],
+            "active",
+        )
+        self.assertTrue(build_dashboard_strategies_payload(config, store)["strategies"]["definitions"])
+
     def test_instrument_detail_uses_persisted_ticks_bars_and_trade_markers(self):
         config = load_config()
         quote_time = date(2026, 8, 17)

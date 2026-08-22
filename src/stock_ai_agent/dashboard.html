@@ -202,6 +202,30 @@
     .param-list { display:flex; flex-wrap:wrap; gap:5px; }
     .param-pill { padding:3px 6px; border:1px solid var(--line); border-radius:4px; background:#f8fafc; color:var(--subtle); font:500 11px/1.25 "Fira Code","SFMono-Regular",monospace; }
     .backtest-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 20px; border-bottom:1px solid #edf1f6; flex-wrap:wrap; }
+    .strategy-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 20px; border-bottom:1px solid #edf1f6; flex-wrap:wrap; }
+    .strategy-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; padding:20px; }
+    .strategy-card { min-width:0; padding:16px; border:1px solid var(--line); border-radius:6px; background:#fbfdff; cursor:pointer; transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+    .strategy-card:hover, .strategy-card:focus-within { border-color:var(--accent); box-shadow:0 5px 16px rgba(28,91,180,.10); transform:translateY(-1px); }
+    .strategy-card h3 { margin:0; font-size:15px; }
+    .strategy-card p { margin:5px 0 0; color:var(--subtle); font-size:12px; }
+    .strategy-card-top { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+    .strategy-members { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+    .strategy-member { padding:5px 7px; border:1px solid var(--line); border-radius:4px; background:#fff; color:var(--subtle); font-size:11px; }
+    .strategy-member.active { color:var(--blue-dark); border-color:#a9c8f7; background:var(--blue-wash); }
+    .strategy-member small { display:block; margin-top:2px; color:var(--quiet); font-family:"Fira Code","SFMono-Regular",monospace; }
+    .strategy-changes { padding:0 20px 20px; }
+    .strategy-changes h3 { margin:0 0 10px; font-size:14px; }
+    .strategy-editor { margin:0 20px 20px; padding:16px; border:1px solid #c8d9f4; border-radius:6px; background:#f8fbff; }
+    .strategy-editor-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+    .strategy-editor-head h3 { margin:0; font-size:15px; }
+    .strategy-editor-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+    .strategy-editor label { display:grid; gap:5px; color:var(--subtle); font-size:12px; font-weight:650; }
+    .strategy-editor input, .strategy-editor textarea, .strategy-editor select { width:100%; min-height:36px; padding:7px 9px; border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--ink); font:400 13px/1.4 "Fira Sans","PingFang SC",sans-serif; }
+    .strategy-editor textarea { min-height:84px; resize:vertical; font-family:"Fira Code","SFMono-Regular",monospace; font-size:11px; }
+    .strategy-editor-members { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:14px 0; }
+    .strategy-editor-member { display:grid; grid-template-columns:auto minmax(0,1fr) 72px; align-items:center; gap:7px; padding:8px; border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--ink); font-size:12px; }
+    .strategy-editor-member input[type="number"] { min-height:30px; padding:4px 6px; }
+    .strategy-editor-actions { display:flex; justify-content:flex-end; gap:8px; }
     .report-shell { display:grid; grid-template-columns:minmax(240px,300px) minmax(0,1fr); gap:20px; align-items:start; }
     .report-archive { position:sticky; top:132px; overflow:hidden; }
     .report-list { max-height:calc(100dvh - 220px); overflow-y:auto; scrollbar-color:#bdcce0 transparent; scrollbar-width:thin; }
@@ -331,6 +355,10 @@
       th, td { padding:11px 12px; }
       .activity-list { grid-template-columns:1fr; }
       .activity-item { border-right:0; border-bottom:1px solid #edf1f6; }
+      .strategy-grid { grid-template-columns:1fr; padding:16px; }
+      .strategy-changes { padding-right:16px; padding-left:16px; }
+      .strategy-editor { margin-right:16px; margin-left:16px; }
+      .strategy-editor-fields, .strategy-editor-members { grid-template-columns:1fr; }
       .activity-item:last-child { border-bottom:0; }
       .backtest-toolbar { padding-right:16px; padding-left:16px; }
       .report-shell { grid-template-columns:1fr; }
@@ -387,6 +415,7 @@
     <nav class="view-tabs" id="appTabs" role="tablist" aria-label="工作区">
       <button class="view-tab active" id="dashboardTab" type="button" role="tab" aria-selected="true" aria-controls="dashboardView" data-view="dashboardView">交易看板</button>
       <button class="view-tab" id="backtestTab" type="button" role="tab" aria-selected="false" aria-controls="backtestView" data-view="backtestView">回测记录</button>
+      <button class="view-tab" id="strategyTab" type="button" role="tab" aria-selected="false" aria-controls="strategyView" data-view="strategyView">策略中心</button>
       <button class="view-tab" id="dailyReportTab" type="button" role="tab" aria-selected="false" aria-controls="dailyReportView" data-view="dailyReportView">日报归档</button>
     </nav>
   </header>
@@ -424,6 +453,9 @@
     </div>
     <div class="view hidden" id="backtestView" role="tabpanel" aria-labelledby="backtestTab">
       <section class="panel" aria-labelledby="backtestTitle"><div class="panel-head"><div class="panel-title"><span class="panel-title-mark" aria-hidden="true"></span><div><h2 id="backtestTitle">回测记录</h2><p class="panel-note">策略参数只在人工确认后才可进入下一轮评估</p></div></div></div><div class="backtest-toolbar"><span class="muted">确认不会自动替换当前实时策略。</span><button class="primary-button" id="confirmSelectedBtn" type="button" onclick="confirmSelectedBacktests()"><i data-lucide="check-check" aria-hidden="true"></i>确认所选</button></div><div id="backtests"></div></section>
+    </div>
+    <div class="view hidden" id="strategyView" role="tabpanel" aria-labelledby="strategyTab">
+      <section class="panel" aria-labelledby="strategyTitle"><div class="panel-head"><div class="panel-title"><span class="panel-title-mark" aria-hidden="true"></span><div><h2 id="strategyTitle">策略中心</h2><p class="panel-note">数据库中的 active revision 会在下一轮盯盘时生效</p></div></div><span class="panel-count" id="strategyMeta">准备中</span></div><div class="strategy-toolbar"><span class="muted">策略代码固定，页面管理组合、权重和参数；风险上限仍由系统风控控制。</span><button class="secondary-button" type="button" onclick="loadStrategies(true)"><i data-lucide="refresh-cw" aria-hidden="true"></i>刷新策略</button></div><div class="strategy-grid" id="strategyCards"><div class="empty">正在读取策略配置...</div></div><div class="strategy-editor" id="strategyEditor"><div class="empty">选择策略组合后编辑。</div></div><div class="strategy-changes" id="strategyChanges"></div></section>
     </div>
     <div class="view hidden" id="dailyReportView" role="tabpanel" aria-labelledby="dailyReportTab" tabindex="-1">
       <div class="report-shell">
@@ -466,7 +498,7 @@
     const seriesStyle = [{color:'#1769e0',dash:[],label:'AI-Agent'}, {color:'#a9640f',dash:[7,4]}, {color:'#7b61a8',dash:[3,3]}, {color:'#187a65',dash:[10,4]}, {color:'#536b91',dash:[2,4]}, {color:'#b5474d',dash:[8,3,2,3]}];
     let latestData = null, rankRows = [], sortKey = 'profit_amount', sortAsc = false, chartMode = 'return', performanceRangeMode = 'yearly', performanceStart = null, performanceEnd = null, performancePickerRoot = null, calendarMode = 'monthly', calendarValueMode = 'amount', calendarPeriod = null, calendarPickerRoot = null, selectedInstrument = null, instrumentSearchTimer = null, instrumentDetail = null, instrumentDetailPeriod = 'intraday', instrumentChartState = null, instrumentChartFocusIndex = -1, instrumentChartObserver = null;
     let visibleSeries = new Set(), knownSeries = new Set(), chartState = null, chartFocusIndex = -1, loading = false, chartObserver = null;
-    let overviewPromise = null, performanceRequestId = 0, backtestsLoaded = false, dailyReportsLoaded = false, dailyReportsLoading = false, selectedReportDate = null, dailyReportRows = [], dailyReportOffset = 0, dailyReportsHasMore = false;
+    let overviewPromise = null, performanceRequestId = 0, backtestsLoaded = false, strategiesLoaded = false, strategyCenterState = null, selectedStrategyProfileId = 'default', dailyReportsLoaded = false, dailyReportsLoading = false, selectedReportDate = null, dailyReportRows = [], dailyReportOffset = 0, dailyReportsHasMore = false;
     const DAILY_REPORT_PAGE_SIZE = 30;
     let uiLibrariesPromise = null;
 
@@ -548,6 +580,13 @@
       renderBacktests(data);
       renderAccount(data);
     }
+    async function loadStrategies(announceRefresh = false) {
+      const payload = await fetchDashboardSection('/api/dashboard/strategies');
+      strategiesLoaded = true;
+      const data = mergeDashboardData(payload);
+      renderStrategies(data);
+      if (announceRefresh) announce('策略配置已刷新。');
+    }
     async function loadDailyReports(reset = true, quiet = false) {
       if (dailyReportsLoading) return;
       dailyReportsLoading=true;
@@ -620,6 +659,7 @@
         document.querySelectorAll('.view').forEach(view => view.classList.toggle('hidden', view.id !== target));
         document.getElementById(target).focus({preventScroll:true});
         if (target === 'backtestView' && !backtestsLoaded) loadBacktests().catch(() => announce('回测记录读取失败，请稍后重试。'));
+        if (target === 'strategyView' && !strategiesLoaded) loadStrategies().catch(() => announce('策略配置读取失败，请稍后重试。'));
         if (target === 'dailyReportView') loadDailyReports(true).catch(() => { renderDailyReportDetail(null,'日报归档读取失败，请稍后重试。'); announce('日报归档读取失败。'); });
       }));
       document.querySelectorAll('#chartTabs button').forEach(button => button.addEventListener('click', () => {
@@ -1036,6 +1076,53 @@
       if(!runs.length) { document.getElementById('backtests').innerHTML='<div class="empty">暂无回测记录。运行参数优化后，候选策略会在这里等待人工确认。</div>'; return; }
       const rows=runs.map(run=>{const confirmed=run.status==='已确认';return '<tr><td><input class="backtest-check" aria-label="选择 '+escapeHtml(run.strategy_id)+'" type="checkbox" value="'+run.id+'" '+(confirmed?'disabled':'')+'></td><td><div class="security-name">'+strategyName(run.strategy_id)+'</div><div class="security-code">'+escapeHtml(run.strategy_id)+'</div></td><td><div class="param-list">'+parameterPills(run.parameters)+'</div></td><td><span class="status-badge '+(confirmed?'confirmed':'')+'">'+escapeHtml(run.status)+'</span></td><td><button class="secondary-button" type="button" onclick="confirmBacktests(['+run.id+'])" '+(confirmed?'disabled':'')+'>确认</button></td></tr>';}).join('');
       document.getElementById('backtests').innerHTML='<div class="table-wrap"><table><thead><tr><th><input type="checkbox" aria-label="选择全部待确认记录" onchange="toggleAllBacktests(this.checked)"></th><th>策略</th><th>参数</th><th>状态</th><th>操作</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+    }
+    function renderStrategies(data) {
+      const center=data.strategies || {}, definitions=center.definitions || [], definitionMap=Object.fromEntries(definitions.map(item=>[item.strategy_id,item]));
+      strategyCenterState=center;
+      const profiles=center.profiles || [];
+      document.getElementById('strategyMeta').textContent=profiles.filter(item=>item.status==='active').length+' 个生效组合';
+      const cards=profiles.length ? profiles.map(profile=>{
+        const members=(profile.enabled || []).map(id=>{const item=definitionMap[id] || {name_zh:id,name_en:id}; const weight=profile.weights?.[id]; return '<span class="strategy-member active">'+escapeHtml(item.name_zh)+'<small>'+escapeHtml(item.name_en)+(weight !== undefined ? ' · 权重 '+escapeHtml(weight) : '')+'</small></span>';}).join('');
+        const scope=profile.scope_type==='default'?'默认组合':(profile.scope_type==='symbol'?'标的 '+profile.scope_value:'资产类型 '+profile.scope_value);
+        return '<article class="strategy-card" data-profile-id="'+escapeHtml(profile.profile_id)+'"><div class="strategy-card-top"><div><h3>'+escapeHtml(profile.name_zh || profile.profile_id)+'</h3><p>'+escapeHtml(profile.name_en || profile.profile_id)+' · '+escapeHtml(scope)+'</p></div><span class="status-badge '+(profile.status==='active'?'confirmed':'')+'">'+escapeHtml(profile.status==='active'?'生效中':'待确认')+'</span></div><div class="strategy-members">'+(members || '<span class="muted">未启用策略</span>')+'</div><p>Revision '+escapeHtml(profile.revision || '--')+' · 运行时按标的优先级解析</p></article>';
+      }).join('') : '<div class="empty">暂无策略组合。系统初始化后会生成默认组合。</div>';
+      document.getElementById('strategyCards').innerHTML=cards;
+      document.querySelectorAll('#strategyCards .strategy-card').forEach(card=>card.addEventListener('click',()=>{selectedStrategyProfileId=card.dataset.profileId;renderStrategyEditor();}));
+      const changes=center.changes || [];
+      document.getElementById('strategyChanges').innerHTML=changes.length ? '<h3>最近变更</h3><div class="table-wrap"><table><thead><tr><th>组合</th><th>动作</th><th>操作人</th><th>时间</th></tr></thead><tbody>'+changes.slice(0,20).map(item=>'<tr><td>'+escapeHtml(item.profile_id)+'</td><td>'+escapeHtml(item.action)+'</td><td>'+escapeHtml(item.operator)+'</td><td>'+escapeHtml(item.created_at)+'</td></tr>').join('')+'</tbody></table></div>' : '';
+      if (!profiles.some(item=>item.profile_id===selectedStrategyProfileId)) selectedStrategyProfileId=profiles[0]?.profile_id || 'default';
+      renderStrategyEditor();
+      iconify();
+    }
+    function renderStrategyEditor() {
+      const center=strategyCenterState || {}, profiles=center.profiles || [], definitions=center.definitions || [], profile=profiles.find(item=>item.profile_id===selectedStrategyProfileId) || profiles[0];
+      if (!profile) { document.getElementById('strategyEditor').innerHTML='<div class="empty">暂无可编辑策略组合。</div>'; return; }
+      selectedStrategyProfileId=profile.profile_id;
+      const members=definitions.filter(item=>item.strategy_id!=='strategy_aggregator').map(item=>'<label class="strategy-editor-member"><input type="checkbox" data-strategy-enabled="'+escapeHtml(item.strategy_id)+'" '+((profile.enabled || []).includes(item.strategy_id)?'checked':'')+'><span>'+escapeHtml(item.name_zh)+'<small>'+escapeHtml(item.name_en)+'</small></span><input type="number" min="0" step="0.05" data-strategy-weight="'+escapeHtml(item.strategy_id)+'" value="'+escapeHtml(profile.weights?.[item.strategy_id] ?? '0')+'" aria-label="'+escapeHtml(item.name_zh)+'权重"></label>').join('');
+      document.getElementById('strategyEditor').innerHTML='<div class="strategy-editor-head"><h3>配置策略组合</h3><div class="panel-head-actions"><button class="secondary-button compact-button" type="button" onclick="newStrategyProfile()">新建组合</button><button class="secondary-button compact-button" type="button" onclick="confirmCurrentStrategyProfile()" '+(profile.status==='active'?'disabled':'')+'>确认生效</button></div></div><div class="strategy-editor-fields"><label>组合 ID<input id="strategyProfileId" value="'+escapeHtml(profile.profile_id)+'"></label><label>中文名称<input id="strategyProfileNameZh" value="'+escapeHtml(profile.name_zh || '')+'"></label><label>English Name<input id="strategyProfileNameEn" value="'+escapeHtml(profile.name_en || '')+'"></label><label>适用范围<select id="strategyScopeType"><option value="default" '+(profile.scope_type==='default'?'selected':'')+'>默认</option><option value="asset_type" '+(profile.scope_type==='asset_type'?'selected':'')+'>资产类型</option><option value="symbol" '+(profile.scope_type==='symbol'?'selected':'')+'>单标的</option></select></label><label>范围值<input id="strategyScopeValue" value="'+escapeHtml(profile.scope_value || '')+'" placeholder="如 etf 或 588170.SH"></label><label>当前状态<input value="'+escapeHtml(profile.status==='active'?'生效中':'待确认')+'" disabled></label></div><div class="strategy-editor-members">'+members+'</div><div class="strategy-editor-fields"><label>技术指标参数 JSON<textarea id="strategyTechnical">'+escapeHtml(JSON.stringify(profile.technical || {}, null, 2))+'</textarea></label><label>量化参数 JSON<textarea id="strategyQuant">'+escapeHtml(JSON.stringify(profile.quant || {}, null, 2))+'</textarea></label><label>聚合器参数 JSON<textarea id="strategyAggregator">'+escapeHtml(JSON.stringify(profile.aggregator || {}, null, 2))+'</textarea></label></div><div class="strategy-editor-actions"><button class="primary-button" type="button" onclick="saveCurrentStrategyProfile()">保存为待确认</button></div>';
+    }
+    function newStrategyProfile() {
+      const base=(strategyCenterState?.profiles || []).find(item=>item.profile_id==='default') || {};
+      selectedStrategyProfileId='';
+      strategyCenterState={...(strategyCenterState || {}),profiles:[{...base,profile_id:'',name_zh:'新策略组合',name_en:'New Strategy Profile',scope_type:'symbol',scope_value:'',status:'draft',revision:0}]};
+      renderStrategyEditor();
+    }
+    function readStrategyJson(id) {
+      try { return JSON.parse(document.getElementById(id).value || '{}'); } catch (error) { throw new Error(id+' 参数必须是有效 JSON'); }
+    }
+    async function saveCurrentStrategyProfile() {
+      try {
+        const enabled=[...document.querySelectorAll('[data-strategy-enabled]:checked')].map(item=>item.dataset.strategyEnabled);
+        const weights=Object.fromEntries([...document.querySelectorAll('[data-strategy-weight]')].map(item=>[item.dataset.strategyWeight,item.value || '0']));
+        const response=await fetch('/api/strategies/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile_id:document.getElementById('strategyProfileId').value.trim(),name_zh:document.getElementById('strategyProfileNameZh').value.trim(),name_en:document.getElementById('strategyProfileNameEn').value.trim(),scope_type:document.getElementById('strategyScopeType').value,scope_value:document.getElementById('strategyScopeValue').value.trim(),enabled,weights,technical:readStrategyJson('strategyTechnical'),quant:readStrategyJson('strategyQuant'),aggregator:readStrategyJson('strategyAggregator')})});
+        if(!response.ok) throw new Error('策略保存失败');
+        const payload=await response.json(); strategyCenterState=payload.strategies; strategiesLoaded=true; selectedStrategyProfileId=document.getElementById('strategyProfileId').value.trim(); renderStrategies({strategies:strategyCenterState}); announce('策略组合已保存，等待人工确认。');
+      } catch(error) { announce(error.message || '策略保存失败，请检查参数。'); }
+    }
+    async function confirmCurrentStrategyProfile() {
+      if (!selectedStrategyProfileId) return;
+      try { const response=await fetch('/api/strategies/profiles/'+encodeURIComponent(selectedStrategyProfileId)+'/confirm',{method:'POST'}); if(!response.ok)throw new Error('策略确认失败'); const payload=await response.json(); strategyCenterState=payload.strategies; renderStrategies({strategies:strategyCenterState}); announce('策略组合已确认，下一轮盯盘生效。'); } catch(error) { announce(error.message || '策略确认失败。'); }
     }
     function renderDailyReportList(reports) {
       const target=document.getElementById('dailyReportList');

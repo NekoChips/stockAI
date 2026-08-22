@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import List, Protocol
+from typing import Any, List, Protocol
 
 from ..models import Bar, Quote
 
@@ -65,4 +65,25 @@ class MarketDataStore(Protocol):
         ...
 
     def load_daily_report(self, report_date: date | str) -> dict | None:
+        ...
+
+    def load_trading_calendar(self, year: int) -> dict[date, bool] | None:
+        ...
+
+    def save_trading_calendar(self, year: int, trading_days: set[date], source: str, covered_until: date | None = None) -> int:
+        ...
+
+    def ensure_strategy_defaults(self, config: Any) -> None:
+        ...
+
+    def load_active_strategy_profile(self, symbol: str, asset_type: str) -> dict | None:
+        ...
+
+    def load_strategy_center(self, config: Any) -> dict:
+        ...
+
+    def save_strategy_profile(self, profile: dict, operator: str = "web") -> dict:
+        ...
+
+    def confirm_strategy_profile(self, profile_id: str, operator: str = "web") -> dict:
         ...

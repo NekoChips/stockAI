@@ -198,6 +198,12 @@ def build_dashboard_backtests_payload(store) -> dict[str, Any]:
     return _to_jsonable({"backtest_runs": runs})
 
 
+def build_dashboard_strategies_payload(config: AppConfig, store) -> dict[str, Any]:
+    if hasattr(store, "load_strategy_center"):
+        return _to_jsonable({"strategies": store.load_strategy_center(config)})
+    return _to_jsonable({"strategies": {"definitions": [], "profiles": [], "changes": []}})
+
+
 def build_dashboard_reports_payload(store, limit: int = 60, offset: int = 0) -> dict[str, Any]:
     reports = store.load_daily_reports(limit=limit, offset=offset) if hasattr(store, "load_daily_reports") else []
     return _to_jsonable({"daily_reports": reports})
@@ -229,7 +235,6 @@ def _query_date(values: dict[str, list[str]], name: str) -> date | None:
         return date.fromisoformat(raw)
     except ValueError as exc:
         raise ValueError(f"{name} 必须使用 YYYY-MM-DD 格式。") from exc
-
 
 
 

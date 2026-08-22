@@ -4,7 +4,9 @@ from .instrument_detail import build_instrument_detail_payload
 from .web_actions import (
     add_dashboard_watchlist_item,
     confirm_backtest_runs,
+    confirm_dashboard_strategy_profile,
     remove_dashboard_watchlist_item,
+    save_dashboard_strategy_profile,
     search_watchlist_instruments,
 )
 from .web_assets import render_dashboard_html
@@ -17,6 +19,7 @@ from .web_dashboard import (
     build_dashboard_performance_payload,
     build_dashboard_report_payload,
     build_dashboard_reports_payload,
+    build_dashboard_strategies_payload,
     _performance_range,
     _query_date,
 )
@@ -39,10 +42,13 @@ __all__ = [
     "build_dashboard_performance_payload",
     "build_dashboard_report_payload",
     "build_dashboard_reports_payload",
+    "build_dashboard_strategies_payload",
     "build_ready_payload",
     "build_instrument_detail_payload",
     "confirm_backtest_runs",
+    "confirm_dashboard_strategy_profile",
     "remove_dashboard_watchlist_item",
+    "save_dashboard_strategy_profile",
     "render_dashboard_html",
     "search_watchlist_instruments",
     "serve_dashboard",

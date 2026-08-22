@@ -181,7 +181,7 @@ def aggregate_signals(
     negative = 0
 
     for signal in signal_list:
-        weight = weights.get(signal.strategy_id, Decimal("1"))
+        weight = Decimal(str(weights.get(signal.strategy_id, Decimal("1"))))
         total_weight += weight
         weighted_score += signal.score * weight
         if signal.score > 0:
