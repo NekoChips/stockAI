@@ -208,6 +208,11 @@ def build_dashboard_backtests_payload(store) -> dict[str, Any]:
     return _to_jsonable({"backtest_runs": runs})
 
 
+def build_dashboard_orders_payload(store, limit: int = 100) -> dict[str, Any]:
+    orders = store.load_orders(limit) if hasattr(store, "load_orders") else []
+    return _to_jsonable({"orders": orders})
+
+
 def build_dashboard_strategies_payload(config: AppConfig, store) -> dict[str, Any]:
     if hasattr(store, "load_strategy_center"):
         return _to_jsonable({"strategies": store.load_strategy_center(config)})
@@ -245,4 +250,3 @@ def _query_date(values: dict[str, list[str]], name: str) -> date | None:
         return date.fromisoformat(raw)
     except ValueError as exc:
         raise ValueError(f"{name} 必须使用 YYYY-MM-DD 格式。") from exc
-

@@ -18,17 +18,20 @@ from .instrument_detail import build_instrument_detail_payload
 from .web_actions import (
     add_dashboard_watchlist_item,
     confirm_backtest_runs,
+    discard_dashboard_strategy_draft,
     confirm_dashboard_strategy_profile,
     confirm_dashboard_risk_config,
     remove_dashboard_watchlist_item,
     save_dashboard_strategy_profile,
     save_dashboard_risk_config,
+    run_dashboard_backtest,
     set_dashboard_watchlist_trading,
     search_watchlist_instruments,
 )
 from .web_assets import render_dashboard_html
 from .web_dashboard import (
     build_dashboard_backtests_payload,
+    build_dashboard_orders_payload,
     build_dashboard_calendar_payload,
     build_dashboard_overview_payload,
     build_dashboard_payload,
@@ -167,6 +170,10 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 payload = build_dashboard_backtests_payload(store)
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
+            if request.path == "/api/dashboard/orders":
+                payload = build_dashboard_orders_payload(store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
             if request.path == "/api/dashboard/strategies":
                 payload = build_dashboard_strategies_payload(config, store)
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
@@ -247,6 +254,14 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 payload = json.dumps(confirm_backtest_runs(config, store, ids), ensure_ascii=False).encode("utf-8")
                 _send(self, "application/json; charset=utf-8", payload)
                 return
+            if request.path == "/api/backtests/run":
+                try:
+                    payload = run_dashboard_backtest(config, store)
+                except (TypeError, ValueError) as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
             if request.path == "/api/strategies/profiles":
                 data = self._read_json_body()
                 if data is None:
@@ -317,6 +332,16 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
             if not self._require_authorization():
                 return
             request = urlparse(self.path)
+            strategy_draft_prefix = "/api/strategies/profiles/"
+            if request.path.startswith(strategy_draft_prefix) and request.path.endswith("/draft"):
+                profile_id = unquote(request.path[len(strategy_draft_prefix):-len("/draft")]).strip("/")
+                try:
+                    payload = discard_dashboard_strategy_draft(config, store, profile_id)
+                except ValueError as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
             prefix = "/api/watchlist/"
             if request.path.startswith(prefix):
                 try:

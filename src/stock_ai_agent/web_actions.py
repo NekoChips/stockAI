@@ -11,6 +11,7 @@ from .risk_config import parse_risk_config, risk_config_payload
 from .web_support import _DASHBOARD_CACHE, _to_jsonable
 from .web_dashboard import build_dashboard_overview_payload
 from .web_dashboard import build_dashboard_strategies_payload
+from .strategy_runtime import LEGACY_STRATEGY_ID_ALIASES
 
 
 def confirm_backtest_runs(config: AppConfig, store, run_ids: list[int]) -> dict[str, Any]:
@@ -22,6 +23,23 @@ def confirm_backtest_runs(config: AppConfig, store, run_ids: list[int]) -> dict[
             "backtest_runs": store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else [],
         }
     )
+
+
+def run_dashboard_backtest(config: AppConfig, store) -> dict[str, Any]:
+    from .app import optimize_strategy_from_store
+
+    optimize_strategy_from_store(config, store)
+    _DASHBOARD_CACHE.invalidate_store(id(store))
+    return _to_jsonable({"backtest_runs": store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else []})
+
+
+def discard_dashboard_strategy_draft(config: AppConfig, store, profile_id: str) -> dict[str, Any]:
+    del config
+    if not hasattr(store, "discard_strategy_draft"):
+        raise ValueError("当前存储适配器不支持撤销策略草稿。")
+    store.discard_strategy_draft(profile_id)
+    _DASHBOARD_CACHE.invalidate_store(id(store))
+    return {"discarded": profile_id}
 
 
 def search_watchlist_instruments(config: AppConfig, store, query: str, provider=None, limit: int = 12) -> list[dict[str, str]]:
@@ -95,8 +113,8 @@ def save_dashboard_strategy_profile(config: AppConfig, store, payload: dict[str,
     profile_id = str(profile.get("profile_id") or profile.get("scope_value") or "").strip()
     if not profile_id:
         raise ValueError("策略组合必须提供 profile_id。")
-    enabled = [str(item) for item in profile.get("enabled", []) if str(item)]
-    weights = {str(key): str(value) for key, value in dict(profile.get("weights") or {}).items()}
+    enabled = [LEGACY_STRATEGY_ID_ALIASES.get(str(item), str(item)) for item in profile.get("enabled", []) if str(item)]
+    weights = {LEGACY_STRATEGY_ID_ALIASES.get(str(key), str(key)): str(value) for key, value in dict(profile.get("weights") or {}).items()}
     for value in weights.values():
         try:
             if float(value) < 0:
@@ -106,8 +124,8 @@ def save_dashboard_strategy_profile(config: AppConfig, store, payload: dict[str,
     enabled_weights = [float(weights[item]) for item in enabled if item in weights]
     if not enabled:
         raise ValueError("至少启用一个策略。")
-    if len(enabled_weights) != len(enabled) or abs(sum(enabled_weights) - 1.0) > 0.0001:
-        raise ValueError("已启用策略的权重合计必须为 100%。")
+    if len(enabled_weights) != len(enabled) or sum(enabled_weights) <= 0:
+        raise ValueError("每个已启用策略都必须配置正权重，权重合计必须大于 0。")
     aggregator = dict(profile.get("aggregator") or {})
     for key in ("buy_score_threshold", "exit_score_threshold"):
         if key in aggregator:
@@ -123,6 +141,7 @@ def save_dashboard_strategy_profile(config: AppConfig, store, payload: dict[str,
         "weights": weights,
         "technical": dict(profile.get("technical") or {}),
         "quant": dict(profile.get("quant") or {}),
+        "external": dict(profile.get("external") or {}),
         "aggregator": aggregator,
     })
     store.ensure_strategy_defaults(config) if hasattr(store, "ensure_strategy_defaults") else None

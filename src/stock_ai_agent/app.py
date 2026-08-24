@@ -23,12 +23,13 @@ from .monitor import RealTimePaperTradingMonitor
 from .paper_broker import PaperBroker, PaperBrokerError
 from .quant_strategies import QuantContext
 from .risk import RiskEngine
+from .risk_config import resolve_risk_config
 from .reference_data import sync_benchmark_history, sync_instrument_catalog
 from .storage.base import MarketDataStore
 from .storage.mock import MockMarketDataStore
 from .storage.mysql import MySQLMarketDataStore
 from .strategy import StrategyContext, aggregate_signals
-from .strategy_runtime import evaluate_strategy_profile, profile_from_config
+from .strategy_runtime import evaluate_strategy_profile, load_external_strategy_context, profile_from_config, resolve_strategy_profile
 from .universe import Universe
 from .web import serve_dashboard
 from .watchlist import effective_watchlist
@@ -82,11 +83,12 @@ def run_once(
     histories: Dict[str, List[Decimal]],
     quote_provider=None,
     report_date: Optional[date] = None,
+    store: MarketDataStore | None = None,
 ) -> RunResult:
     universe = Universe.from_config(config.universe)
     portfolio = Portfolio(config.paper_account.initial_cash)
-    broker = PaperBroker(portfolio, config.paper_account.fee_rate, config.paper_account.slippage_rate)
-    risk = RiskEngine(config.risk, universe)
+    broker = PaperBroker(portfolio, config.paper_account.fee_rate, config.paper_account.slippage_rate, min_commission=config.paper_account.min_commission, stock_sell_stamp_tax=config.paper_account.stock_sell_stamp_tax)
+    risk = RiskEngine(resolve_risk_config(config, store) if store else config.risk, universe)
     quote_provider = quote_provider or create_market_data_provider(config)
     decisions: List[Decision] = []
     fills: List[Fill] = []
@@ -111,14 +113,15 @@ def run_once(
             peak_values={instrument.symbol: max(config.paper_account.initial_cash, current_value)},
             current_values={instrument.symbol: current_value},
         )
-        profile = profile_from_config(config, asset_type=instrument.asset_type)
+        profile = resolve_strategy_profile(config, store, instrument.symbol, instrument.asset_type) if store else profile_from_config(config, asset_type=instrument.asset_type)
         signals = evaluate_strategy_profile(
             profile,
             instrument.symbol,
             features,
             strategy_context,
             quant_context,
-            config.risk.high_atr_ratio,
+            risk.config.high_atr_ratio,
+            load_external_strategy_context(store, instrument.symbol, quote, as_of=report_date) if store else None,
         )
         aggregate = aggregate_signals(signals, profile["weights"], profile["aggregator"])
         risk_result = risk.evaluate(
@@ -172,7 +175,7 @@ def run_once_from_store(
         symbol: [bar.close_price for bar in bars]
         for symbol, bars in bars_by_symbol.items()
     }
-    return run_once(config, bars_by_symbol, histories, quote_provider, report_date)
+    return run_once(config, bars_by_symbol, histories, quote_provider, report_date, store)
 
 
 def sync_history(config: AppConfig, store: MarketDataStore, adapter=None, as_of: date | None = None) -> dict[str, int]:
@@ -200,8 +203,9 @@ def sync_history(config: AppConfig, store: MarketDataStore, adapter=None, as_of:
             continue
         start, end = range_to_sync
         bars = adapter.get_bars(symbol, interval=interval, start=start, end=end, adjust=adjust)
+        raw_bars = adapter.get_bars(symbol, interval=interval, start=start, end=end, adjust="")
         source = getattr(adapter, "last_source", "") or config.data.history_provider
-        counts[symbol] = store.save_bars(bars, interval=interval, source=source)
+        counts[symbol] = store.save_price_tracks(raw_bars, bars, interval=interval, source=source) if hasattr(store, "save_price_tracks") else store.save_bars(bars, interval=interval, source=source)
     return counts
 
 

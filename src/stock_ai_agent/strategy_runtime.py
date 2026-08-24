@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
 from .config import AppConfig
 from .quant_strategies import (
     DrawdownControlStrategy,
+    ExternalStrategyContext,
+    FuturesPositionSentimentStrategy,
+    LhbConsensusStrategy,
+    LhbFollowStarSeatsStrategy,
+    LhbQuantSectorStrategy,
+    LhbReverseInstitutionalStrategy,
+    LhbSeatProfileStrategy,
     MeanReversionStrategy,
+    OverseasMarketSentimentStrategy,
     QuantContext,
     RelativeStrengthRotationStrategy,
     TimeSeriesMomentumStrategy,
@@ -25,11 +34,20 @@ STRATEGY_IDS = (
     "relative_strength",
     "volatility_target",
     "drawdown_control",
-    "futures_sentiment",
-    "overseas_sentiment",
-    "lhb_follow",
-    "quant_sector_rotation",
+    "futures_position_sentiment",
+    "overseas_market_sentiment",
+    "lhb_follow_star_seats",
+    "lhb_reverse_institutional",
+    "lhb_seat_profile",
+    "lhb_consensus",
+    "lhb_quant_sector",
 )
+LEGACY_STRATEGY_ID_ALIASES = {
+    "futures_sentiment": "futures_position_sentiment",
+    "overseas_sentiment": "overseas_market_sentiment",
+    "lhb_follow": "lhb_follow_star_seats",
+    "quant_sector_rotation": "lhb_quant_sector",
+}
 
 
 def profile_from_config(config: AppConfig, name: str = "default", asset_type: str = "etf") -> dict[str, Any]:
@@ -52,6 +70,7 @@ def profile_from_config(config: AppConfig, name: str = "default", asset_type: st
         "weights": {key: str(value) for key, value in weights.items()},
         "technical": deepcopy(config.strategy.technical),
         "quant": deepcopy(config.strategy.quant),
+        "external": deepcopy(config.strategy.external),
         "aggregator": deepcopy(config.strategy.aggregator),
         "target_weight_levels": [str(item) for item in config.strategy.target_weight_levels],
     }
@@ -67,11 +86,13 @@ def resolve_strategy_profile(config: AppConfig, store: Any, symbol: str, asset_t
     merged = deepcopy(fallback)
     merged.update(profile)
     merged["enabled"] = list(profile.get("enabled") or fallback["enabled"])
-    for key in ("weights", "technical", "quant", "aggregator"):
+    for key in ("weights", "technical", "quant", "external", "aggregator"):
         values = dict(fallback.get(key) or {})
         values.update(profile.get(key) or {})
         merged[key] = values
     merged["weights"] = {key: value for key, value in merged["weights"].items() if key in merged["enabled"]}
+    merged["enabled"] = [LEGACY_STRATEGY_ID_ALIASES.get(key, key) for key in merged["enabled"]]
+    merged["weights"] = {LEGACY_STRATEGY_ID_ALIASES.get(key, key): value for key, value in merged["weights"].items()}
     return merged
 
 
@@ -82,6 +103,7 @@ def evaluate_strategy_profile(
     strategy_context: StrategyContext,
     quant_context: QuantContext,
     high_atr_ratio: Decimal,
+    external_context: ExternalStrategyContext | None = None,
 ) -> list:
     enabled = set(profile.get("enabled") or STRATEGY_IDS)
     quant = profile.get("quant") or {}
@@ -99,10 +121,80 @@ def evaluate_strategy_profile(
         signals.append(VolatilityTargetStrategy(high_atr_ratio).evaluate(symbol, features, quant_context))
     if "drawdown_control" in enabled:
         signals.append(DrawdownControlStrategy(Decimal(str(quant.get("drawdown_stop", "0.08")))).evaluate(symbol, features, quant_context))
-    for strategy_id in ("futures_sentiment", "overseas_sentiment", "lhb_follow", "quant_sector_rotation"):
-        if strategy_id in enabled:
-            signals.append(_unavailable_signal(strategy_id, symbol))
+    external = external_context or ExternalStrategyContext()
+    strategy_options = profile.get("external") or {}
+    if "futures_position_sentiment" in enabled:
+        signals.append(FuturesPositionSentimentStrategy(strategy_options.get("futures_position_sentiment", {})).evaluate(symbol, features, external))
+    if "overseas_market_sentiment" in enabled:
+        signals.append(OverseasMarketSentimentStrategy(strategy_options.get("overseas_market_sentiment", {})).evaluate(symbol, features, external))
+    if "lhb_follow_star_seats" in enabled:
+        signals.append(LhbFollowStarSeatsStrategy(strategy_options.get("lhb_follow_star_seats", {})).evaluate(symbol, features, external))
+    if "lhb_reverse_institutional" in enabled:
+        signals.append(LhbReverseInstitutionalStrategy(strategy_options.get("lhb_reverse_institutional", {})).evaluate(symbol, features, external))
+    if "lhb_seat_profile" in enabled:
+        signals.append(LhbSeatProfileStrategy(strategy_options.get("lhb_seat_profile", {})).evaluate(symbol, features, external))
+    if "lhb_consensus" in enabled:
+        signals.append(LhbConsensusStrategy(strategy_options.get("lhb_consensus", {})).evaluate(symbol, features, external))
+    if "lhb_quant_sector" in enabled:
+        signals.append(LhbQuantSectorStrategy(strategy_options.get("lhb_quant_sector", {})).evaluate(symbol, features, external))
     return signals
+
+
+def load_external_strategy_context(
+    store: Any,
+    symbol: str,
+    quote=None,
+    *,
+    as_of: date | None = None,
+) -> ExternalStrategyContext:
+    """Load analysis-only external data. No external instrument may become a tradeable symbol."""
+    as_of = as_of or date.today()
+    futures = store.load_latest_futures_position() if hasattr(store, "load_latest_futures_position") else None
+    if futures and not _is_recent_external_row(futures, as_of):
+        futures = None
+    overseas_rows = store.load_latest_overseas_data() if hasattr(store, "load_latest_overseas_data") else None
+    if overseas_rows is not None:
+        overseas_rows = [row for row in overseas_rows if _is_recent_external_row(row, as_of)]
+    overseas = {str(row.get("symbol")): row for row in overseas_rows} if overseas_rows is not None else None
+    lhb_rows = store.load_lhb_records() if hasattr(store, "load_lhb_records") else None
+    if lhb_rows is not None:
+        lhb_rows = [row for row in lhb_rows if _is_recent_external_row(row, as_of)]
+    sector = store.load_instrument_sector(symbol) if hasattr(store, "load_instrument_sector") else None
+    auction_gap = None
+    if quote is not None and quote.previous_close > 0:
+        auction_gap = ((quote.open_price / quote.previous_close) - Decimal("1")) * Decimal("100")
+    profiles = {}
+    if lhb_rows is not None and hasattr(store, "load_seat_profile"):
+        for row in lhb_rows:
+            for side in ("buy", "sell"):
+                for index in range(1, 6):
+                    seat = row.get(f"{side}_seat_{index}")
+                    if seat and seat not in profiles:
+                        profile = store.load_seat_profile(str(seat))
+                        if profile:
+                            profiles[str(seat)] = profile
+    quant_seats = {str(row["seat_name"]): row for row in store.load_quant_seats()} if hasattr(store, "load_quant_seats") else {}
+    return ExternalStrategyContext(
+        futures=futures,
+        overseas=overseas,
+        lhb_records=lhb_rows,
+        sector=sector or "综合",
+        auction_gap_pct=auction_gap,
+        seat_profiles=profiles,
+        quant_seats=quant_seats,
+    )
+
+
+def _is_recent_external_row(row: dict[str, Any], as_of: date, max_age_days: int = 5) -> bool:
+    """Weekend-aware freshness guard for daily post-market evidence."""
+    raw_date = row.get("trade_date")
+    if not raw_date:
+        return False
+    try:
+        source_date = date.fromisoformat(str(raw_date)[:10])
+    except ValueError:
+        return False
+    return 0 <= (as_of - source_date).days <= max_age_days
 
 
 def _unavailable_signal(strategy_id: str, symbol: str):

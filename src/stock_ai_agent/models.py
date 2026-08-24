@@ -19,6 +19,8 @@ class Direction(str, Enum):
 class OrderStatus(str, Enum):
     CREATED = "已创建"
     APPROVED = "风控通过"
+    SUBMITTED = "已提交"
+    PARTIALLY_FILLED = "部分成交"
     REJECTED = "已拒绝"
     FILLED = "已成交"
     CANCELED = "已取消"
@@ -71,6 +73,8 @@ class Bar:
     close_price: Decimal
     volume: Decimal
     amount: Decimal = Decimal("0")
+    price_mode: str = "qfq"
+    adjustment_factor: Decimal = Decimal("1")
 
 
 @dataclass(frozen=True)
@@ -117,10 +121,22 @@ class PaperOrder:
     requested_price: Decimal
     status: OrderStatus = OrderStatus.CREATED
     reason: str = ""
+    order_id: str = ""
+    asset_type: str = "etf"
+    filled_quantity: int = 0
+    average_fill_price: Decimal = Decimal("0")
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    submitted_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    rejected_reason: str = ""
 
     @property
     def notional(self) -> Decimal:
         return (self.requested_price * Decimal(self.quantity)).quantize(Decimal("0.01"))
+
+    @property
+    def remaining_quantity(self) -> int:
+        return max(0, self.quantity - self.filled_quantity)
 
 
 @dataclass(frozen=True)
@@ -132,6 +148,7 @@ class Fill:
     fee: Decimal
     slippage: Decimal
     timestamp: datetime
+    order_id: str = ""
 
     @property
     def gross_amount(self) -> Decimal:

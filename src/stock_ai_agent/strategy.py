@@ -172,6 +172,7 @@ def aggregate_signals(
     exit_threshold = Decimal(str(aggregator.get("exit_score_threshold", "-1.5" if legacy_aggregation else "-0.60")))
     conflict_max_weight = Decimal(str(aggregator.get("conflict_max_weight", "0.20")))
     confidence_divisor = Decimal(str(aggregator.get("confidence_divisor", "5")))
+    score_scale = Decimal(str(aggregator.get("score_normalization_divisor", "3")))
     symbol = signal_list[0].symbol
     total_weight = Decimal("0")
     weighted_score = Decimal("0")
@@ -194,8 +195,7 @@ def aggregate_signals(
         effective_weight += weight
         total_weight += weight
         normalized_score = signal.score if legacy_aggregation else max(
-            Decimal("-1"),
-            min(Decimal("1"), signal.score / Decimal("2") if signal.score.copy_abs() > 1 else signal.score),
+            Decimal("-1"), min(Decimal("1"), signal.score / score_scale if score_scale > 0 else signal.score)
         )
         weighted_score += normalized_score * weight
         if normalized_score > 0:
@@ -204,7 +204,7 @@ def aggregate_signals(
             negative += 1
         evidence.extend([f"{signal.strategy_id}: {item}" for item in signal.evidence])
         objections.extend([f"{signal.strategy_id}: {item}" for item in signal.objections])
-        is_risk_control = signal.strategy_id in {"volatility_target", "drawdown_control"}
+        is_risk_control = signal.strategy_id in {"volatility_target", "drawdown_control", "futures_position_sentiment"}
         if not is_risk_control and signal.target_weight > target_weight and normalized_score > 0:
             target_weight = signal.target_weight
         if is_risk_control and signal.direction in {Direction.REDUCE, Direction.EXIT}:

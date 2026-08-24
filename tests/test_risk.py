@@ -79,6 +79,15 @@ class RiskTests(unittest.TestCase):
         self.assertIsNone(result.order)
         self.assertIn("总仓位", "；".join(result.decision.reasons))
 
+    def test_max_drawdown_reduces_to_half_instead_of_exiting(self):
+        portfolio = Portfolio(Decimal("20000"), {"588170.SH": Position("588170.SH", 40000, 40000, Decimal("1"), Decimal("1"))})
+        result = self.engine.evaluate(signal(Direction.HOLD, Decimal("0.60")), portfolio, quote(), historical_peak=Decimal("100000"))
+
+        self.assertTrue(result.decision.approved)
+        self.assertIsNotNone(result.order)
+        self.assertEqual(result.order.direction, Direction.REDUCE)
+        self.assertEqual(result.decision.target_weight, Decimal("0.30"))
+
 
 if __name__ == "__main__":
     unittest.main()

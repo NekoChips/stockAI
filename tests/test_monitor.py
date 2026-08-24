@@ -99,7 +99,7 @@ class MonitorTests(unittest.TestCase):
 
         self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 8, 0, tzinfo=tz)), 3900)
         self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 12, 0, tzinfo=tz)), 3600)
-        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 15, 10, tzinfo=tz)), 18 * 60 * 60 + 20 * 60)
+        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 15, 10, tzinfo=tz)), 3 * 60 * 60 + 50 * 60)
 
     def test_non_trading_day_sleep_skips_to_next_trading_day(self):
         config = configured_config()
@@ -113,7 +113,7 @@ class MonitorTests(unittest.TestCase):
 
         seconds = monitor._sleep_seconds(datetime(2026, 8, 17, 15, 30, tzinfo=tz))
 
-        self.assertEqual(seconds, 42 * 60 * 60)
+        self.assertEqual(seconds, 3 * 60 * 60 + 30 * 60)
 
     def test_iteration_executes_and_persists_paper_fill(self):
         config = configured_config()

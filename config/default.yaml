@@ -83,7 +83,9 @@
   "paper_account": {
     "initial_cash": "1000000",
     "fee_rate": "0.0003",
-    "slippage_rate": "0.0005"
+    "slippage_rate": "0.0005",
+    "min_commission": "5",
+    "stock_sell_stamp_tax": "0.0005"
   },
   "universe": [],
   "benchmarks": [
@@ -113,8 +115,8 @@
     "target_weight_levels": ["0", "0.20", "0.40", "0.60"],
     "manual_approval_required": true,
     "enabled_by_asset_type": {
-      "etf": ["technical_composite", "time_series_momentum"],
-      "stock": ["technical_composite", "time_series_momentum"]
+      "etf": ["technical_composite", "time_series_momentum", "mean_reversion", "relative_strength", "volatility_target", "drawdown_control", "futures_position_sentiment", "overseas_market_sentiment", "lhb_follow_star_seats", "lhb_reverse_institutional", "lhb_seat_profile", "lhb_consensus", "lhb_quant_sector"],
+      "stock": ["technical_composite", "time_series_momentum", "mean_reversion", "relative_strength", "volatility_target", "drawdown_control", "futures_position_sentiment", "overseas_market_sentiment", "lhb_follow_star_seats", "lhb_reverse_institutional", "lhb_seat_profile", "lhb_consensus", "lhb_quant_sector"]
     },
     "weights": {
       "technical_composite": "0.30",
@@ -123,31 +125,52 @@
       "relative_strength": "0.20",
       "volatility_target": "0.15",
       "drawdown_control": "0.10",
-      "futures_sentiment": "0.15",
-      "overseas_sentiment": "0.25",
-      "lhb_follow": "0.35",
-      "quant_sector_rotation": "0.20"
+      "futures_position_sentiment": "0.25",
+      "overseas_market_sentiment": "0.20",
+      "lhb_follow_star_seats": "0.10",
+      "lhb_reverse_institutional": "0.05",
+      "lhb_seat_profile": "0.08",
+      "lhb_consensus": "0.04",
+      "lhb_quant_sector": "0.03"
     },
     "weights_by_asset_type": {
       "etf": {
         "technical_composite": "0.40",
         "time_series_momentum": "0.20",
-        "futures_sentiment": "0.15",
-        "overseas_sentiment": "0.25"
+        "mean_reversion": "0.15",
+        "relative_strength": "0.20",
+        "volatility_target": "0.15",
+        "drawdown_control": "0.10",
+        "futures_position_sentiment": "0.25",
+        "overseas_market_sentiment": "0.20",
+        "lhb_follow_star_seats": "0.10",
+        "lhb_reverse_institutional": "0.05",
+        "lhb_seat_profile": "0.08",
+        "lhb_consensus": "0.04",
+        "lhb_quant_sector": "0.03"
       },
       "stock": {
         "technical_composite": "0.25",
         "time_series_momentum": "0.10",
-        "futures_sentiment": "0.10",
-        "lhb_follow": "0.35",
-        "quant_sector_rotation": "0.20"
+        "mean_reversion": "0.15",
+        "relative_strength": "0.20",
+        "volatility_target": "0.15",
+        "drawdown_control": "0.10",
+        "futures_position_sentiment": "0.25",
+        "overseas_market_sentiment": "0.20",
+        "lhb_follow_star_seats": "0.10",
+        "lhb_reverse_institutional": "0.05",
+        "lhb_seat_profile": "0.08",
+        "lhb_consensus": "0.04",
+        "lhb_quant_sector": "0.03"
       }
     },
     "aggregator": {
-      "buy_score_threshold": "0.60",
+      "buy_score_threshold": "0.40",
       "exit_score_threshold": "-0.60",
       "conflict_max_weight": "0.20",
-      "confidence_divisor": "1"
+      "confidence_divisor": "1",
+      "score_normalization_divisor": "2.5"
     },
     "technical": {
       "bullish_score": "2",
@@ -168,6 +191,15 @@
       "mean_reversion_z": "-1.2",
       "drawdown_stop": "0.08",
       "cooldown_days": 3
+    },
+    "external": {
+      "futures_position_sentiment": {"contracts": ["IC"], "bullish_threshold": "0.60", "overheated_cap": "0.40"},
+      "overseas_market_sentiment": {"us_sector_weight": "2", "nasdaq_weight": "1.5", "kr_tech_weight": "1", "us_sector_bullish": "2", "us_sector_bearish": "-2", "nasdaq_bullish": "1.5", "nasdaq_bearish": "-1.5", "strong_buy_score": "2.5", "buy_score": "1.5", "reduce_score": "-1", "strong_reduce_score": "-2", "nasdaq_correlated_sectors": ["信息技术"], "kr_tech_correlated_sectors": ["信息技术"]},
+      "lhb_follow_star_seats": {"star_seats": [], "min_buy_amount": "1000", "min_buy_ratio": "0.05", "signal_score": "1"},
+      "lhb_reverse_institutional": {"min_institutional_count": 3, "min_sell_amount": "500", "min_gap_down": "-3", "signal_score": "1.5", "target_weight": "0.20"},
+      "lhb_seat_profile": {"min_win_rate": "0.60", "min_sample_size": 20, "min_buy_amount": "1000"},
+      "lhb_consensus": {"min_buy_amount": "1000", "signal_score": "2.5"},
+      "lhb_quant_sector": {"min_symbols_in_sector": 3, "min_buy_amount": "500", "signal_score": "1"}
     }
   }
 }

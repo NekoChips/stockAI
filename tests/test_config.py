@@ -37,7 +37,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual([item.name for item in config.benchmarks][:2], ["上证指数", "深证成指"])
         self.assertEqual(config.timezone, "Asia/Shanghai")
         self.assertTrue(config.strategy.manual_approval_required)
-        self.assertEqual(config.strategy.enabled_by_asset_type["etf"], ["technical_composite", "time_series_momentum"])
+        self.assertIn("futures_position_sentiment", config.strategy.enabled_by_asset_type["etf"])
+        self.assertIn("lhb_quant_sector", config.strategy.enabled_by_asset_type["etf"])
         self.assertEqual(config.monitor.poll_seconds, 60)
         self.assertTrue(config.monitor.respect_market_hours)
 

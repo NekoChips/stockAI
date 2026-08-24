@@ -59,6 +59,8 @@ class PaperAccountConfig:
     initial_cash: Decimal
     fee_rate: Decimal
     slippage_rate: Decimal
+    min_commission: Decimal = Decimal("5")
+    stock_sell_stamp_tax: Decimal = Decimal("0.0005")
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,7 @@ class StrategyConfig:
     aggregator: Dict[str, object]
     quant: Dict[str, object]
     technical: Dict[str, object]
+    external: Dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -188,6 +191,8 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
             initial_cash=_decimal(account["initial_cash"]),
             fee_rate=_decimal(account["fee_rate"]),
             slippage_rate=_decimal(account["slippage_rate"]),
+            min_commission=_decimal(account.get("min_commission", "5")),
+            stock_sell_stamp_tax=_decimal(account.get("stock_sell_stamp_tax", "0.0005")),
         ),
         universe=[
             InstrumentConfig(
@@ -238,6 +243,7 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
             aggregator=dict(strategy.get("aggregator", {})),
             quant=dict(strategy["quant"]),
             technical=dict(strategy.get("technical", {})),
+            external=dict(strategy.get("external", {})),
         ),
         monitor=MonitorConfig(
             poll_seconds=int(monitor.get("poll_seconds", 60)),

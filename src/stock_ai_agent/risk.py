@@ -44,13 +44,15 @@ class RiskEngine:
         forced_reason = self._forced_reason(position, quote, portfolio, historical_peak)
         forced = forced_reason is not None and position is not None and position.quantity > 0
         if forced:
+            current_weight = portfolio.position_weight(signal.symbol)
+            forced_target = Decimal("0") if "清仓" in forced_reason else (current_weight * Decimal("0.5")).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
             signal = StrategySignal(
                 "risk_control",
                 signal.symbol,
                 Direction.EXIT if "清仓" in forced_reason else Direction.REDUCE,
                 Decimal("-1"),
                 Decimal("1"),
-                Decimal("0"),
+                forced_target,
                 [],
                 [forced_reason],
                 forced_reason,
