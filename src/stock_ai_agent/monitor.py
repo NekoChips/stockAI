@@ -19,6 +19,7 @@ from .models import Bar, Decision, Fill, Portfolio
 from .paper_broker import PaperBroker, PaperBrokerError
 from .quant_strategies import QuantContext
 from .risk import RiskEngine
+from .risk_config import resolve_risk_config
 from .reference_data import sync_benchmark_history, sync_instrument_catalog
 from .strategy import StrategyContext, aggregate_signals
 from .strategy_runtime import evaluate_strategy_profile, resolve_strategy_profile
@@ -56,7 +57,7 @@ class PaperTradingStore(Protocol):
     def load_fills(self, trade_date: date) -> List[Fill]:
         ...
 
-    def count_fills(self, trade_date: date) -> int:
+    def count_fills(self, trade_date: date, symbol: str | None = None) -> int:
         ...
 
     def settle_t_plus_one(self, settle_date: date | None = None) -> bool:
@@ -66,9 +67,6 @@ class PaperTradingStore(Protocol):
         ...
 
     def load_portfolio_snapshots(self) -> list[tuple[date, Decimal]]:
-        ...
-
-    def count_fills(self, trade_date: date) -> int:
         ...
 
     def save_quotes(self, quotes) -> int:
@@ -128,6 +126,13 @@ class RealTimePaperTradingMonitor:
         trade_date = local_now.date()
         portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
 
+        if (
+            self.config.monitor.respect_market_hours
+            and not ignore_market_hours
+            and not is_trading_time(local_now, self._is_trading_day)
+        ):
+            return MonitorIterationResult("skipped", "当前不在 A 股连续竞价交易时段，跳过本轮盯盘。", portfolio, [], [])
+
         self._sync_daily_reference_data(trade_date)
         self._compact_watch_decisions(trade_date)
         self._prepare_intraday_quote_store(local_now)
@@ -136,11 +141,20 @@ class RealTimePaperTradingMonitor:
             self.store.settle_t_plus_one(trade_date)
             portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
 
-        if self.config.monitor.respect_market_hours and not ignore_market_hours and not is_trading_time(local_now, self._is_trading_day):
-            return MonitorIterationResult("skipped", "当前不在 A 股连续竞价交易时段，跳过本轮盯盘。", portfolio, [], [])
-
-        universe = Universe.from_config(effective_watchlist(self.config, self.store))
-        risk = RiskEngine(self.config.risk, universe)
+        watchlist = effective_watchlist(self.config, self.store)
+        held_symbols = set(portfolio.positions)
+        universe = Universe.from_config([item for item in watchlist if item.trading_enabled or item.symbol in held_symbols])
+        active_risk = resolve_risk_config(self.config, self.store)
+        risk = RiskEngine(active_risk, universe)
+        strategy_profiles = {
+            instrument.symbol: resolve_strategy_profile(
+                self.config,
+                self.store,
+                instrument.symbol,
+                instrument.asset_type,
+            )
+            for instrument in universe.instruments
+        }
         broker = PaperBroker(portfolio, self.config.paper_account.fee_rate, self.config.paper_account.slippage_rate)
         interval = str(self.config.data.history.get("interval", "daily"))
         history_limit = int(self.config.data.history.get("monitor_history_limit", 80))
@@ -169,6 +183,14 @@ class RealTimePaperTradingMonitor:
 
         snapshots = self.store.load_portfolio_snapshots()
         historical_peak = max((value for _, value in snapshots), default=self.config.paper_account.initial_cash)
+        previous_total_asset = next(
+            (value for snapshot_date, value in reversed(snapshots) if snapshot_date < trade_date),
+            self.config.paper_account.initial_cash,
+        )
+        portfolio_daily_loss_hit = (
+            previous_total_asset > 0
+            and portfolio.total_asset() <= previous_total_asset * (Decimal("1") - active_risk.portfolio_daily_loss)
+        )
         daily_trade_count = self.store.count_fills(trade_date)
 
         for instrument in universe.instruments:
@@ -208,17 +230,26 @@ class RealTimePaperTradingMonitor:
                 peak_values={instrument.symbol: max(historical_peak, current_value)},
                 current_values={instrument.symbol: current_value},
             )
-            profile = resolve_strategy_profile(self.config, self.store, instrument.symbol, instrument.asset_type)
+            profile = strategy_profiles[instrument.symbol]
             signals = evaluate_strategy_profile(
                 profile,
                 instrument.symbol,
                 features,
                 strategy_context,
                 quant_context,
-                self.config.risk.high_atr_ratio,
+                active_risk.high_atr_ratio,
             )
             aggregate = aggregate_signals(signals, profile["weights"], profile["aggregator"])
-            risk_result = risk.evaluate(aggregate, portfolio, quote, daily_trade_count=daily_trade_count)
+            symbol_operations = self.store.count_fills(trade_date, instrument.symbol)
+            risk_result = risk.evaluate(
+                aggregate,
+                portfolio,
+                quote,
+                daily_trade_count=daily_trade_count,
+                symbol_daily_operation_count=symbol_operations,
+                portfolio_daily_loss_hit=portfolio_daily_loss_hit,
+                historical_peak=historical_peak,
+            )
             decisions.append(risk_result.decision)
             self.store.record_decision(risk_result.decision, trade_date)
             if not risk_result.order:
@@ -250,6 +281,8 @@ class RealTimePaperTradingMonitor:
 
     def generate_post_close_report(self, report_date: date | None = None) -> dict:
         report_date = report_date or datetime.now(self.timezone).date()
+        if not self._is_trading_day(report_date):
+            return {"report_date": report_date.isoformat(), "status": "skipped", "summary": "非交易日不生成日报。"}
         portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
         snapshots = self.store.load_portfolio_snapshots()
         previous_total_asset = next(
@@ -310,6 +343,9 @@ class RealTimePaperTradingMonitor:
                     portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
                     result = MonitorIterationResult("reported", "收盘日报已归档到数据库。", portfolio, [], [], report)
                     self._reported_dates.append(local_now.date())
+                elif self.config.monitor.respect_market_hours and not ignore_market_hours and not self._is_active_monitor_window(local_now):
+                    portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
+                    result = MonitorIterationResult("sleeping", "非交易时段，monitor 进入休眠。", portfolio, [], [])
                 elif not self._trading_data_ready:
                     ready, warnings = self.initialize_trading_data(local_now.date())
                     if not ready:
@@ -353,7 +389,9 @@ class RealTimePaperTradingMonitor:
             return float(self.config.monitor.poll_seconds)
         local_time = now.timetz().replace(tzinfo=None)
         if self._is_trading_day(now.date()):
-            if local_time < clock_time(9, 30):
+            if local_time < clock_time(9, 5):
+                target = datetime.combine(now.date(), clock_time(9, 5), tzinfo=now.tzinfo)
+            elif local_time < clock_time(9, 30):
                 target = datetime.combine(now.date(), clock_time(9, 30), tzinfo=now.tzinfo)
             elif local_time < clock_time(13, 0):
                 target = datetime.combine(now.date(), clock_time(13, 0), tzinfo=now.tzinfo)
@@ -364,6 +402,13 @@ class RealTimePaperTradingMonitor:
         else:
             target = self._next_trading_open(now.date(), now.tzinfo)
         return max(1.0, (target - now).total_seconds())
+
+    def _is_active_monitor_window(self, now: datetime) -> bool:
+        """Allow the 09:05 initialization window and both trading sessions."""
+        if not self._is_trading_day(now.date()):
+            return False
+        local_time = now.timetz().replace(tzinfo=None)
+        return clock_time(9, 5) <= local_time <= clock_time(15, 0)
 
     def _next_trading_open(self, current: date, timezone) -> datetime:
         candidate = current + timedelta(days=1)

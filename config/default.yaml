@@ -10,7 +10,7 @@
     "market_fallback_providers": ["akshare"],
     "history_provider": "alphafeed",
     "history_fallback_providers": ["akshare", "eastmoney_public"],
-    "freshness_seconds": 90,
+    "freshness_seconds": 120,
     "history": {
       "interval": "daily",
       "adjust": "qfq",
@@ -20,8 +20,10 @@
       "monitor_history_limit": 80,
       "retry_attempts": 1,
       "retry_backoff_seconds": 1,
-      "circuit_breaker_failure_threshold": 3,
-      "circuit_breaker_cooldown_seconds": 120
+      "fallback_retry_attempts": 2,
+      "fallback_retry_backoff_seconds": 15,
+      "circuit_breaker_failure_threshold": 1,
+      "circuit_breaker_cooldown_seconds": 60
     },
     "providers": {
       "alphafeed": {
@@ -33,8 +35,8 @@
         "kline_max_symbols_per_request": 1,
         "kline_max_requests_per_minute": 8,
         "history_count": 2000,
-        "circuit_breaker_failure_threshold": 3,
-        "circuit_breaker_cooldown_seconds": 120
+        "circuit_breaker_failure_threshold": 1,
+        "circuit_breaker_cooldown_seconds": 60
       },
       "akshare": {
         "stock_spot_function": "stock_zh_a_spot_em",
@@ -83,10 +85,7 @@
     "fee_rate": "0.0003",
     "slippage_rate": "0.0005"
   },
-  "universe": [
-    {"symbol": "588170.SH", "asset_type": "etf", "name": "科创100ETF基金"},
-    {"symbol": "588200.SH", "asset_type": "etf", "name": "科创芯片ETF基金"}
-  ],
+  "universe": [],
   "benchmarks": [
     {"symbol": "000001.SH", "name": "上证指数", "akshare_symbol": "000001"},
     {"symbol": "399001.SZ", "name": "深证成指", "akshare_symbol": "399001"},
@@ -95,29 +94,60 @@
     {"symbol": "000688.SH", "name": "科创50", "akshare_symbol": "000688"}
   ],
   "risk": {
-    "max_symbol_weight": "0.60",
+    "max_symbol_weight": "0.30",
+    "max_etf_weight": "0.30",
+    "max_stock_weight": "0.30",
+    "max_etf_total_weight": "0.50",
+    "max_stock_total_weight": "0.40",
     "max_total_exposure": "0.90",
-    "min_cash_ratio": "0.05",
-    "max_drawdown": "0.12",
-    "max_daily_trades": 6,
+    "min_cash_ratio": "0.10",
+    "max_daily_trades": null,
+    "max_operations_per_symbol": 10,
+    "max_drawdown": "0.10",
+    "single_position_loss": "0.08",
+    "trailing_drawdown": "0.06",
+    "portfolio_daily_loss": "0.03",
     "high_atr_ratio": "0.04"
   },
   "strategy": {
     "target_weight_levels": ["0", "0.20", "0.40", "0.60"],
     "manual_approval_required": true,
+    "enabled_by_asset_type": {
+      "etf": ["technical_composite", "time_series_momentum"],
+      "stock": ["technical_composite", "time_series_momentum"]
+    },
     "weights": {
       "technical_composite": "0.30",
       "time_series_momentum": "0.20",
       "mean_reversion": "0.15",
       "relative_strength": "0.20",
       "volatility_target": "0.15",
-      "drawdown_control": "0.30"
+      "drawdown_control": "0.10",
+      "futures_sentiment": "0.15",
+      "overseas_sentiment": "0.25",
+      "lhb_follow": "0.35",
+      "quant_sector_rotation": "0.20"
+    },
+    "weights_by_asset_type": {
+      "etf": {
+        "technical_composite": "0.40",
+        "time_series_momentum": "0.20",
+        "futures_sentiment": "0.15",
+        "overseas_sentiment": "0.25"
+      },
+      "stock": {
+        "technical_composite": "0.25",
+        "time_series_momentum": "0.10",
+        "futures_sentiment": "0.10",
+        "lhb_follow": "0.35",
+        "quant_sector_rotation": "0.20"
+      }
     },
     "aggregator": {
-      "buy_score_threshold": "1.5",
-      "exit_score_threshold": "-1.5",
+      "buy_score_threshold": "0.60",
+      "exit_score_threshold": "-0.60",
       "conflict_max_weight": "0.20",
-      "confidence_divisor": "5"
+      "confidence_divisor": "1"
     },
     "technical": {
       "bullish_score": "2",

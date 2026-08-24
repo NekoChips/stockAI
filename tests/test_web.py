@@ -2,11 +2,12 @@ import gzip
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from stock_ai_agent.config import load_config
+from stock_ai_agent.config import InstrumentConfig, load_config
 from stock_ai_agent.models import Bar, Direction, Fill, Portfolio, Position, Quote
 from stock_ai_agent.storage.mock import MockMarketDataStore as SQLiteMarketDataStore
 from stock_ai_agent.web import (
@@ -57,7 +58,7 @@ class WebDashboardTests(unittest.TestCase):
         self.assertTrue(build_dashboard_strategies_payload(config, store)["strategies"]["definitions"])
 
     def test_instrument_detail_uses_persisted_ticks_bars_and_trade_markers(self):
-        config = load_config()
+        config = replace(load_config(), universe=[InstrumentConfig("588170.SH", "etf", "科创100ETF基金")])
         quote_time = date(2026, 8, 17)
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "detail.sqlite3")
@@ -158,7 +159,7 @@ class WebDashboardTests(unittest.TestCase):
         self.assertNotIn("600519.SH", {item["symbol"] for item in removed["watchlist"]})
 
     def test_removing_default_watchlist_item_hides_it_without_changing_config(self):
-        config = load_config()
+        config = replace(load_config(), universe=[InstrumentConfig("588170.SH", "etf", "科创100ETF基金")])
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "dashboard.sqlite3")
             removed = remove_dashboard_watchlist_item(config, store, "588170.SH")

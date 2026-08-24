@@ -8,7 +8,7 @@ the release MySQL configuration for persistent paper trading.
 """
 
 from copy import deepcopy
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from ..models import Bar, Decision, Direction, Fill, Portfolio, Position, Quote
@@ -21,6 +21,7 @@ class MockMarketDataStore:
     def __init__(self, *_ignored) -> None:
         self._bars: dict[tuple[str, str, str], Bar] = {}
         self._quotes: list[dict] = []
+        self._quote_events: list[dict] = []
         self._watchlist: dict[str, dict[str, str]] = {}
         self._excluded: set[str] = set()
         self._catalog: dict[str, dict[str, str]] = {}
@@ -32,11 +33,13 @@ class MockMarketDataStore:
         self._backtests: list[dict] = []
         self._reports: dict[str, dict] = {}
         self._last_settle_date: date | None = None
-        self._trading_calendar: dict[int, dict[date, bool]] = {}
+        self._trading_calendar: dict[tuple[str, int], dict[date, bool]] = {}
         self._strategy_definitions: list[dict] = []
         self._strategy_profiles: dict[str, dict] = {}
         self._strategy_drafts: dict[str, dict] = {}
         self._strategy_changes: list[dict] = []
+        self._risk_active: dict | None = None
+        self._risk_draft: dict | None = None
 
     def initialize(self) -> None:
         return None
@@ -87,6 +90,8 @@ class MockMarketDataStore:
             }
             self._quotes = [item for item in self._quotes if not (item["trade_date"] == row["trade_date"] and item["symbol"] == row["symbol"] and item["observed_at"] == row["observed_at"])]
             self._quotes.append(row)
+            self._quote_events = [item for item in self._quote_events if not (item["trade_date"] == row["trade_date"] and item["symbol"] == row["symbol"] and item["observed_at"] == row["observed_at"])]
+            self._quote_events.append(dict(row))
         return len(quotes)
 
     def load_latest_quotes(self, symbols: list[str] | None = None) -> dict[str, dict]:
@@ -105,6 +110,8 @@ class MockMarketDataStore:
         old = [row for row in self._quotes if row["trade_date"] != trade_date.isoformat()]
         self.save_bars(_quote_ticks_to_minute_bars([{key: value for key, value in row.items() if key != "trade_date"} for row in old]), interval="minute", source="market_quotes")
         self._quotes = [row for row in self._quotes if row["trade_date"] == trade_date.isoformat()]
+        cutoff = trade_date - timedelta(days=7)
+        self._quote_events = [row for row in self._quote_events if date.fromisoformat(row["trade_date"]) >= cutoff]
         return len(old)
 
     def load_watchlist_items(self) -> list[dict[str, str]]:
@@ -112,11 +119,23 @@ class MockMarketDataStore:
 
     def add_watchlist_item(self, symbol: str, name: str, asset_type: str) -> None:
         self._excluded.discard(symbol)
-        self._watchlist[symbol] = {"symbol": symbol, "name": name, "asset_type": asset_type}
+        self._watchlist[symbol] = {"symbol": symbol, "name": name, "asset_type": asset_type, "lifecycle_status": "observing", "trading_enabled": 0}
 
     def remove_watchlist_item(self, symbol: str) -> None:
         self._watchlist.pop(symbol, None)
         self._excluded.add(symbol)
+
+    def set_watchlist_trading_enabled(self, symbol: str, enabled: bool) -> None:
+        if symbol not in self._watchlist:
+            raise ValueError(f"标的 {symbol} 不在手动观察池中。")
+        self._watchlist[symbol]["trading_enabled"] = int(bool(enabled))
+        self._watchlist[symbol]["lifecycle_status"] = "trading_enabled" if enabled else "observing"
+
+    def has_pending_orders(self, symbol: str) -> bool:
+        # The development broker fills or rejects synchronously.  Keeping this
+        # explicit makes the watchlist lifecycle contract match MySQL.
+        del symbol
+        return False
 
     def restore_watchlist_item(self, symbol: str) -> None:
         self._excluded.discard(symbol)
@@ -144,7 +163,21 @@ class MockMarketDataStore:
         self._portfolio = deepcopy(portfolio)
 
     def record_decision(self, decision: Decision, trade_date: date) -> None:
-        if decision.direction == Direction.WATCH and any(day == trade_date and item.symbol == decision.symbol and item.direction == Direction.WATCH for day, item in self._decisions):
+        for index, (day, previous) in enumerate(self._decisions):
+            if day != trade_date or previous.symbol != decision.symbol:
+                continue
+            reasons = list(dict.fromkeys([*previous.reasons, *decision.reasons]))
+            self._decisions[index] = (
+                day,
+                Decision(
+                    decision.symbol,
+                    decision.direction,
+                    decision.target_weight,
+                    decision.approved,
+                    reasons,
+                    decision.source_signal or previous.source_signal,
+                ),
+            )
             return
         self._decisions.append((trade_date, deepcopy(decision)))
 
@@ -172,8 +205,9 @@ class MockMarketDataStore:
     def load_fills(self, trade_date: date) -> list[Fill]:
         return [deepcopy(item) for day, item in self._fills if day == trade_date]
 
-    def count_fills(self, trade_date: date) -> int:
-        return len(self.load_fills(trade_date))
+    def count_fills(self, trade_date: date, symbol: str | None = None) -> int:
+        fills = self.load_fills(trade_date)
+        return len([item for item in fills if symbol is None or item.symbol == symbol])
 
     def load_all_fills(self) -> list[Fill]:
         return [deepcopy(item) for _, item in sorted(self._fills, key=lambda value: value[1].timestamp)]
@@ -217,17 +251,17 @@ class MockMarketDataStore:
         value = self._reports.get(report_date.isoformat() if isinstance(report_date, date) else str(report_date))
         return deepcopy(value) if value else None
 
-    def load_trading_calendar(self, year: int) -> dict[date, bool] | None:
-        rows = self._trading_calendar.get(int(year))
+    def load_trading_calendar(self, year: int, market: str = "CN") -> dict[date, bool] | None:
+        rows = self._trading_calendar.get((market.upper(), int(year)))
         return deepcopy(rows) if rows is not None else None
 
-    def save_trading_calendar(self, year: int, trading_days: set[date], source: str, covered_until: date | None = None) -> int:
+    def save_trading_calendar(self, year: int, trading_days: set[date], source: str, covered_until: date | None = None, market: str = "CN") -> int:
         from datetime import timedelta
 
         start = date(int(year), 1, 1)
         end = covered_until or date(int(year), 12, 31)
         total = (end - start).days + 1
-        self._trading_calendar[int(year)] = {
+        self._trading_calendar[(market.upper(), int(year))] = {
             start + timedelta(days=index): start + timedelta(days=index) in trading_days
             for index in range(total)
         }
@@ -237,7 +271,13 @@ class MockMarketDataStore:
         if not self._strategy_definitions:
             self._strategy_definitions = strategy_definitions()
         if "default" not in self._strategy_profiles:
-            self._strategy_profiles["default"] = profile_from_config(config)
+            self._strategy_profiles["default"] = profile_from_config(config, asset_type="etf")
+        elif int(self._strategy_profiles["default"].get("config_schema_version", 1)) < 2 and "default" not in self._strategy_drafts:
+            self._strategy_drafts["default"] = profile_from_config(config, asset_type="etf") | {
+                "status": "draft",
+                "pending_confirmation": True,
+                "migration_note": "旧默认策略已按新基线生成草稿，等待人工确认。",
+            }
 
     def load_active_strategy_profile(self, symbol: str, asset_type: str) -> dict | None:
         for profile in self._strategy_profiles.values():
@@ -290,9 +330,29 @@ class MockMarketDataStore:
             raise ValueError("策略组合不存在。")
         previous = deepcopy(profile)
         profile["status"] = "active"
+        profile["confirmed_by"] = operator
+        profile["confirmed_at"] = datetime.now().isoformat()
+        profile["effective_monitor_round"] = "next"
         self._strategy_profiles[key] = profile
         self._strategy_changes.append({"profile_id": str(profile_id), "action": "confirm", "operator": operator, "before": previous, "after": deepcopy(profile), "created_at": datetime.now().isoformat()})
         return deepcopy(profile)
+
+    def load_active_risk_config(self) -> dict | None:
+        return deepcopy(self._risk_active)
+
+    def load_risk_config_draft(self) -> dict | None:
+        return deepcopy(self._risk_draft)
+
+    def save_risk_config_draft(self, payload: dict, operator: str = "web") -> dict:
+        self._risk_draft = {**deepcopy(payload), "status": "draft", "pending_confirmation": True, "operator": operator}
+        return deepcopy(self._risk_draft)
+
+    def confirm_risk_config(self, operator: str = "web") -> dict:
+        if not self._risk_draft:
+            raise ValueError("没有待确认的风险配置草稿。")
+        self._risk_active = {**deepcopy(self._risk_draft), "status": "active", "pending_confirmation": False, "operator": operator}
+        self._risk_draft = None
+        return deepcopy(self._risk_active)
 
     def settle_t_plus_one(self, settle_date: date | None = None) -> bool:
         if settle_date and self._last_settle_date == settle_date:

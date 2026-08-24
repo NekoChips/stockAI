@@ -5,9 +5,12 @@ from .web_actions import (
     add_dashboard_watchlist_item,
     confirm_backtest_runs,
     confirm_dashboard_strategy_profile,
+    confirm_dashboard_risk_config,
     remove_dashboard_watchlist_item,
     save_dashboard_strategy_profile,
+    save_dashboard_risk_config,
     search_watchlist_instruments,
+    set_dashboard_watchlist_trading,
 )
 from .web_assets import render_dashboard_html
 from .web_dashboard import (
@@ -47,10 +50,13 @@ __all__ = [
     "build_instrument_detail_payload",
     "confirm_backtest_runs",
     "confirm_dashboard_strategy_profile",
+    "confirm_dashboard_risk_config",
     "remove_dashboard_watchlist_item",
     "save_dashboard_strategy_profile",
+    "save_dashboard_risk_config",
     "render_dashboard_html",
     "search_watchlist_instruments",
+    "set_dashboard_watchlist_trading",
     "serve_dashboard",
     "_send",
     "_send_error",

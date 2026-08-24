@@ -96,6 +96,7 @@ class MySQLMarketDataStore:
             """CREATE TABLE IF NOT EXISTS positions (
                 symbol VARCHAR(32) PRIMARY KEY, quantity BIGINT NOT NULL, available_quantity BIGINT NOT NULL,
                 average_cost DECIMAL(20,6) NOT NULL, last_price DECIMAL(20,6) NOT NULL, realized_pnl DECIMAL(20,6) NOT NULL,
+                highest_price DECIMAL(20,6) NOT NULL DEFAULT 0,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS decisions (
@@ -117,6 +118,17 @@ class MySQLMarketDataStore:
                 UNIQUE KEY uq_market_quotes_tick (trade_date, symbol, observed_at),
                 INDEX idx_market_quotes_latest (symbol, trade_date, observed_at)
             ) CHARACTER SET utf8mb4""",
+            """CREATE TABLE IF NOT EXISTS market_quote_events (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date DATE NOT NULL,
+                symbol VARCHAR(32) NOT NULL, name VARCHAR(128) NOT NULL,
+                latest_price DECIMAL(20,6) NOT NULL, change_percent DECIMAL(12,6) NOT NULL,
+                previous_close DECIMAL(20,6) NOT NULL, quoted_at DATETIME(6) NOT NULL,
+                observed_at DATETIME(6) NOT NULL, source VARCHAR(64) NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_market_quote_events_tick (trade_date, symbol, observed_at),
+                INDEX idx_market_quote_events_retention (observed_at),
+                INDEX idx_market_quote_events_symbol (symbol, trade_date, observed_at)
+            ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS fills (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date DATE NOT NULL, symbol VARCHAR(32) NOT NULL,
                 direction VARCHAR(16) NOT NULL, quantity BIGINT NOT NULL, price DECIMAL(20,6) NOT NULL,
@@ -129,11 +141,15 @@ class MySQLMarketDataStore:
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS watchlist_items (
                 symbol VARCHAR(32) PRIMARY KEY, name VARCHAR(128) NOT NULL, asset_type VARCHAR(16) NOT NULL,
+                lifecycle_status VARCHAR(24) NOT NULL DEFAULT 'observing', trading_enabled TINYINT NOT NULL DEFAULT 0,
+                dormant_since DATE NULL,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_watchlist_lifecycle (lifecycle_status, trading_enabled)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS watchlist_exclusions (
-                symbol VARCHAR(32) PRIMARY KEY, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                symbol VARCHAR(32) PRIMARY KEY, removed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS instrument_catalog (
                 symbol VARCHAR(32) PRIMARY KEY, name VARCHAR(128) NOT NULL, asset_type VARCHAR(16) NOT NULL,
@@ -157,9 +173,9 @@ class MySQLMarketDataStore:
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS trading_calendar (
-                trade_date DATE PRIMARY KEY, is_trading_day TINYINT NOT NULL,
+                market VARCHAR(8) NOT NULL DEFAULT 'CN', trade_date DATE NOT NULL, is_trading_day TINYINT NOT NULL,
                 source VARCHAR(64) NOT NULL, synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_trading_calendar_flag (is_trading_day, trade_date)
+                PRIMARY KEY (market, trade_date), INDEX idx_trading_calendar_flag (market, is_trading_day, trade_date)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS strategy_definitions (
                 strategy_id VARCHAR(128) PRIMARY KEY, name_zh VARCHAR(128) NOT NULL, name_en VARCHAR(128) NOT NULL,
@@ -171,6 +187,7 @@ class MySQLMarketDataStore:
                 profile_id VARCHAR(128) PRIMARY KEY, name_zh VARCHAR(128) NOT NULL, name_en VARCHAR(128) NOT NULL,
                 scope_type VARCHAR(32) NOT NULL, scope_value VARCHAR(128) NOT NULL, status VARCHAR(32) NOT NULL,
                 revision INT NOT NULL, profile_data LONGTEXT NOT NULL, draft_data LONGTEXT NULL, draft_revision INT NULL,
+                confirmed_by VARCHAR(128) NULL, confirmed_at DATETIME(6) NULL, effective_monitor_round VARCHAR(64) NULL,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 INDEX idx_strategy_profiles_scope (scope_type, scope_value, status)
             ) CHARACTER SET utf8mb4""",
@@ -186,6 +203,8 @@ class MySQLMarketDataStore:
                 for statement in statements:
                     cursor.execute(statement)
                 self._migrate_market_quotes(cursor)
+                self._migrate_positions(cursor)
+                self._migrate_watchlist(cursor)
                 self._migrate_strategy_profiles(cursor)
 
     @staticmethod
@@ -213,6 +232,41 @@ class MySQLMarketDataStore:
         cursor.execute("ALTER TABLE market_quotes ADD INDEX idx_market_quotes_latest (symbol, trade_date, observed_at)")
 
     @staticmethod
+    def _migrate_positions(cursor) -> None:
+        try:
+            cursor.execute("SHOW COLUMNS FROM positions")
+            columns = {row[0] for row in cursor.fetchall()}
+            if "highest_price" not in columns:
+                cursor.execute("ALTER TABLE positions ADD COLUMN highest_price DECIMAL(20,6) NOT NULL DEFAULT 0 AFTER realized_pnl")
+        except Exception:
+            return
+
+    @staticmethod
+    def _migrate_watchlist(cursor) -> None:
+        try:
+            cursor.execute("SHOW COLUMNS FROM watchlist_items")
+            columns = {row[0] for row in cursor.fetchall()}
+            if "lifecycle_status" not in columns:
+                cursor.execute("ALTER TABLE watchlist_items ADD COLUMN lifecycle_status VARCHAR(24) NOT NULL DEFAULT 'observing'")
+            if "trading_enabled" not in columns:
+                cursor.execute("ALTER TABLE watchlist_items ADD COLUMN trading_enabled TINYINT NOT NULL DEFAULT 0")
+            if "dormant_since" not in columns:
+                cursor.execute("ALTER TABLE watchlist_items ADD COLUMN dormant_since DATE NULL")
+            try:
+                cursor.execute("ALTER TABLE watchlist_items ADD INDEX idx_watchlist_lifecycle (lifecycle_status, trading_enabled)")
+            except Exception:
+                pass
+        except Exception:
+            return
+        try:
+            cursor.execute("SHOW COLUMNS FROM watchlist_exclusions")
+            columns = {row[0] for row in cursor.fetchall()}
+            if "removed_at" not in columns:
+                cursor.execute("ALTER TABLE watchlist_exclusions ADD COLUMN removed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP")
+        except Exception:
+            return
+
+    @staticmethod
     def _migrate_strategy_profiles(cursor) -> None:
         try:
             cursor.execute("SHOW COLUMNS FROM strategy_profiles")
@@ -223,6 +277,12 @@ class MySQLMarketDataStore:
             cursor.execute("ALTER TABLE strategy_profiles ADD COLUMN draft_data LONGTEXT NULL AFTER profile_data")
         if "draft_revision" not in columns:
             cursor.execute("ALTER TABLE strategy_profiles ADD COLUMN draft_revision INT NULL AFTER draft_data")
+        if "confirmed_by" not in columns:
+            cursor.execute("ALTER TABLE strategy_profiles ADD COLUMN confirmed_by VARCHAR(128) NULL")
+        if "confirmed_at" not in columns:
+            cursor.execute("ALTER TABLE strategy_profiles ADD COLUMN confirmed_at DATETIME(6) NULL")
+        if "effective_monitor_round" not in columns:
+            cursor.execute("ALTER TABLE strategy_profiles ADD COLUMN effective_monitor_round VARCHAR(64) NULL")
 
     def save_bars(self, bars: List[Bar], interval: str = "daily", source: str = "unknown") -> int:
         if not bars:
@@ -322,6 +382,15 @@ class MySQLMarketDataStore:
                 quoted_at=VALUES(quoted_at), source=VALUES(source), updated_at=CURRENT_TIMESTAMP""",
             rows,
         )
+        self._executemany(
+            """INSERT INTO market_quote_events (
+                trade_date, symbol, name, latest_price, change_percent, previous_close, quoted_at, observed_at, source
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE latest_price=VALUES(latest_price), change_percent=VALUES(change_percent),
+                previous_close=VALUES(previous_close), quoted_at=VALUES(quoted_at), source=VALUES(source)""",
+            rows,
+        )
+        self._execute("DELETE FROM market_quote_events WHERE observed_at < CURRENT_TIMESTAMP(6) - INTERVAL 7 DAY")
         return len(rows)
 
     def load_latest_quotes(self, symbols: list[str] | None = None) -> dict[str, dict]:
@@ -372,7 +441,7 @@ class MySQLMarketDataStore:
 
     def load_watchlist_items(self) -> list[dict[str, str]]:
         self.initialize()
-        return [{"symbol": row[0], "name": row[1], "asset_type": row[2]} for row in self._fetchall("SELECT symbol, name, asset_type FROM watchlist_items ORDER BY created_at ASC, symbol ASC")]
+        return [{"symbol": row[0], "name": row[1], "asset_type": row[2], "lifecycle_status": row[3], "trading_enabled": row[4]} for row in self._fetchall("SELECT symbol, name, asset_type, lifecycle_status, trading_enabled FROM watchlist_items ORDER BY created_at ASC, symbol ASC")]
 
     def add_watchlist_item(self, symbol: str, name: str, asset_type: str) -> None:
         self.initialize()
@@ -381,12 +450,36 @@ class MySQLMarketDataStore:
                 cursor.execute("DELETE FROM watchlist_exclusions WHERE symbol=%s", (symbol,))
                 cursor.execute("INSERT INTO watchlist_items (symbol, name, asset_type) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE name=VALUES(name), asset_type=VALUES(asset_type), updated_at=CURRENT_TIMESTAMP", (symbol, name, asset_type))
 
+    def set_watchlist_trading_enabled(self, symbol: str, enabled: bool) -> None:
+        self.initialize()
+        status = "trading_enabled" if enabled else "observing"
+        updated = self._execute(
+            "UPDATE watchlist_items SET trading_enabled=%s, lifecycle_status=%s, updated_at=CURRENT_TIMESTAMP WHERE symbol=%s",
+            (int(bool(enabled)), status, symbol),
+        )
+        if not updated:
+            raise ValueError(f"标的 {symbol} 不在手动观察池中。")
+
     def remove_watchlist_item(self, symbol: str) -> None:
         self.initialize()
         with self._connect() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("DELETE FROM watchlist_items WHERE symbol=%s", (symbol,))
                 cursor.execute("INSERT IGNORE INTO watchlist_exclusions (symbol) VALUES (%s)", (symbol,))
+
+    def has_pending_orders(self, symbol: str) -> bool:
+        """Return whether an unfinished order blocks watchlist removal."""
+        self.initialize()
+        try:
+            row = self._fetchone(
+                "SELECT COUNT(*) FROM orders WHERE symbol=%s AND status IN ('pending', 'submitted', '部分成交')",
+                (symbol,),
+            )
+        except Exception:
+            # Older installations do not have the optional order event table;
+            # the current synchronous simulator has no pending order state.
+            return False
+        return bool(row and int(row[0]) > 0)
 
     def restore_watchlist_item(self, symbol: str) -> None:
         self.initialize()
@@ -427,29 +520,60 @@ class MySQLMarketDataStore:
         self.initialize()
         account = self._fetchone("SELECT cash FROM account_state WHERE id=%s", ("paper",))
         portfolio = Portfolio(Decimal(account[0]) if account else initial_cash)
-        for row in self._fetchall("SELECT symbol, quantity, available_quantity, average_cost, last_price, realized_pnl FROM positions ORDER BY symbol ASC"):
-            portfolio.positions[row[0]] = Position(row[0], int(row[1]), int(row[2]), Decimal(row[3]), Decimal(row[4]), Decimal(row[5]))
+        for row in self._fetchall("SELECT symbol, quantity, available_quantity, average_cost, last_price, realized_pnl, highest_price FROM positions ORDER BY symbol ASC"):
+            portfolio.positions[row[0]] = Position(row[0], int(row[1]), int(row[2]), Decimal(row[3]), Decimal(row[4]), Decimal(row[5]), Decimal(row[6]))
         return portfolio
 
     def save_portfolio(self, portfolio: Portfolio) -> None:
         self.initialize()
-        rows = [(item.symbol, item.quantity, item.available_quantity, str(item.average_cost), str(item.last_price), str(item.realized_pnl)) for item in portfolio.positions.values()]
+        rows = [(item.symbol, item.quantity, item.available_quantity, str(item.average_cost), str(item.last_price), str(item.realized_pnl), str(item.highest_price)) for item in portfolio.positions.values()]
         with self._connect() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("INSERT INTO account_state (id, cash) VALUES (%s, %s) ON DUPLICATE KEY UPDATE cash=VALUES(cash), updated_at=CURRENT_TIMESTAMP", ("paper", str(portfolio.cash)))
                 cursor.execute("DELETE FROM positions")
                 if rows:
-                    cursor.executemany("INSERT INTO positions (symbol, quantity, available_quantity, average_cost, last_price, realized_pnl) VALUES (%s, %s, %s, %s, %s, %s)", rows)
+                    cursor.executemany("INSERT INTO positions (symbol, quantity, available_quantity, average_cost, last_price, realized_pnl, highest_price) VALUES (%s, %s, %s, %s, %s, %s, %s)", rows)
 
     def record_decision(self, decision: Decision, trade_date: date) -> None:
         self.initialize()
-        if decision.direction == Direction.WATCH and self._fetchone(
-            "SELECT 1 FROM decisions WHERE trade_date=%s AND symbol=%s AND direction=%s LIMIT 1",
-            (trade_date.isoformat(), decision.symbol, Direction.WATCH.value),
-        ):
-            return
         signal = decision.source_signal
-        self._execute("""INSERT INTO decisions (trade_date, symbol, direction, target_weight, approved, reasons, signal_strategy_id, signal_score, signal_confidence, signal_target_weight, signal_evidence, signal_objections, signal_explanation, signal_version) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""", (trade_date.isoformat(), decision.symbol, decision.direction.value, str(decision.target_weight), int(decision.approved), _dumps(decision.reasons), signal.strategy_id if signal else None, str(signal.score) if signal else None, str(signal.confidence) if signal else None, str(signal.target_weight) if signal else None, _dumps(signal.evidence) if signal else None, _dumps(signal.objections) if signal else None, signal.explanation if signal else None, signal.version if signal else None))
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, reasons FROM decisions WHERE trade_date=%s AND symbol=%s ORDER BY id DESC LIMIT 1",
+                    (trade_date.isoformat(), decision.symbol),
+                )
+                existing = cursor.fetchone()
+                reasons = list(decision.reasons)
+                if existing and existing[1]:
+                    try:
+                        reasons = list(dict.fromkeys([*json.loads(existing[1]), *reasons]))
+                    except (TypeError, ValueError):
+                        pass
+                values = (
+                    decision.direction.value,
+                    str(decision.target_weight),
+                    int(decision.approved),
+                    _dumps(reasons),
+                    signal.strategy_id if signal else None,
+                    str(signal.score) if signal else None,
+                    str(signal.confidence) if signal else None,
+                    str(signal.target_weight) if signal else None,
+                    _dumps(signal.evidence) if signal else None,
+                    _dumps(signal.objections) if signal else None,
+                    signal.explanation if signal else None,
+                    signal.version if signal else None,
+                )
+                if existing:
+                    cursor.execute(
+                        "UPDATE decisions SET direction=%s, target_weight=%s, approved=%s, reasons=%s, signal_strategy_id=%s, signal_score=%s, signal_confidence=%s, signal_target_weight=%s, signal_evidence=%s, signal_objections=%s, signal_explanation=%s, signal_version=%s WHERE id=%s",
+                        (*values, existing[0]),
+                    )
+                else:
+                    cursor.execute(
+                        "INSERT INTO decisions (trade_date, symbol, direction, target_weight, approved, reasons, signal_strategy_id, signal_score, signal_confidence, signal_target_weight, signal_evidence, signal_objections, signal_explanation, signal_version) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        (trade_date.isoformat(), decision.symbol, *values),
+                    )
 
     def compact_watch_decisions(self) -> int:
         """Keep one observation decision per symbol and trading day."""
@@ -476,8 +600,10 @@ class MySQLMarketDataStore:
         self.initialize()
         return [_fill_from_row(row) for row in self._fetchall("SELECT symbol, direction, quantity, price, fee, slippage, timestamp_value FROM fills WHERE trade_date=%s ORDER BY id ASC", (trade_date.isoformat(),))]
 
-    def count_fills(self, trade_date: date) -> int:
+    def count_fills(self, trade_date: date, symbol: str | None = None) -> int:
         self.initialize()
+        if symbol:
+            return int(self._fetchone("SELECT COUNT(*) FROM fills WHERE trade_date=%s AND symbol=%s", (trade_date.isoformat(), symbol))[0])
         return int(self._fetchone("SELECT COUNT(*) FROM fills WHERE trade_date=%s", (trade_date.isoformat(),))[0])
 
     def load_all_fills(self) -> List[Fill]:
@@ -567,17 +693,17 @@ class MySQLMarketDataStore:
         row = self._fetchone("SELECT report_data FROM daily_reports WHERE report_date=%s", (key,))
         return json.loads(row[0]) if row else None
 
-    def load_trading_calendar(self, year: int) -> dict[date, bool] | None:
+    def load_trading_calendar(self, year: int, market: str = "CN") -> dict[date, bool] | None:
         self.initialize()
         rows = self._fetchall(
-            "SELECT trade_date, is_trading_day FROM trading_calendar WHERE trade_date >= %s AND trade_date < %s ORDER BY trade_date",
-            (f"{int(year):04d}-01-01", f"{int(year) + 1:04d}-01-01"),
+            "SELECT trade_date, is_trading_day FROM trading_calendar WHERE market=%s AND trade_date >= %s AND trade_date < %s ORDER BY trade_date",
+            (market.upper(), f"{int(year):04d}-01-01", f"{int(year) + 1:04d}-01-01"),
         )
         if not rows:
             return None
         return {_as_date(row[0]): bool(row[1]) for row in rows}
 
-    def save_trading_calendar(self, year: int, trading_days: set[date], source: str, covered_until: date | None = None) -> int:
+    def save_trading_calendar(self, year: int, trading_days: set[date], source: str, covered_until: date | None = None, market: str = "CN") -> int:
         self.initialize()
         start = date(int(year), 1, 1)
         end = covered_until or date(int(year), 12, 31)
@@ -585,11 +711,11 @@ class MySQLMarketDataStore:
         from datetime import timedelta
 
         rows = [
-            ((start + timedelta(days=index)).isoformat(), int((start + timedelta(days=index)) in trading_days), source)
+            (market.upper(), (start + timedelta(days=index)).isoformat(), int((start + timedelta(days=index)) in trading_days), source)
             for index in range(total)
         ]
         self._executemany(
-            "INSERT INTO trading_calendar (trade_date, is_trading_day, source) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE is_trading_day=VALUES(is_trading_day), source=VALUES(source), synced_at=CURRENT_TIMESTAMP",
+            "INSERT INTO trading_calendar (market, trade_date, is_trading_day, source) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE is_trading_day=VALUES(is_trading_day), source=VALUES(source), synced_at=CURRENT_TIMESTAMP",
             rows,
         )
         return total
@@ -604,9 +730,21 @@ class MySQLMarketDataStore:
                 for item in definitions
             ],
         )
-        if self._fetchone("SELECT profile_id FROM strategy_profiles WHERE profile_id=%s", ("default",)):
+        row = self._fetchone("SELECT profile_data, draft_data FROM strategy_profiles WHERE profile_id=%s", ("default",))
+        if row:
+            try:
+                existing = json.loads(row[0])
+            except (TypeError, json.JSONDecodeError):
+                existing = {}
+            if int(existing.get("config_schema_version", 1)) < 2 and not row[1]:
+                profile = profile_from_config(config, asset_type="etf")
+                profile["migration_note"] = "旧默认策略已按新基线生成草稿，等待人工确认。"
+                self._execute(
+                    "UPDATE strategy_profiles SET draft_data=%s, draft_revision=revision+1, updated_at=CURRENT_TIMESTAMP WHERE profile_id=%s",
+                    (_dumps_obj(profile), "default"),
+                )
             return
-        profile = profile_from_config(config)
+        profile = profile_from_config(config, asset_type="etf")
         self._execute(
             "INSERT INTO strategy_profiles (profile_id, name_zh, name_en, scope_type, scope_value, status, revision, profile_data) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
             ("default", profile["name_zh"], profile["name_en"], "default", "", "active", 1, _dumps_obj(profile)),
@@ -690,9 +828,47 @@ class MySQLMarketDataStore:
         profile["status"] = "active"
         revision = int(row[3] or (profile.get("revision") or 1))
         profile["revision"] = revision
-        self._execute("UPDATE strategy_profiles SET status=%s, revision=%s, profile_data=%s, draft_data=NULL, draft_revision=NULL, updated_at=CURRENT_TIMESTAMP WHERE profile_id=%s", ("active", revision, _dumps_obj(profile), str(profile_id)))
+        self._execute(
+            "UPDATE strategy_profiles SET status=%s, revision=%s, profile_data=%s, draft_data=NULL, draft_revision=NULL, confirmed_by=%s, confirmed_at=CURRENT_TIMESTAMP(6), effective_monitor_round=%s, updated_at=CURRENT_TIMESTAMP WHERE profile_id=%s",
+            ("active", revision, _dumps_obj(profile), operator, "next", str(profile_id)),
+        )
         self._execute("INSERT INTO strategy_change_log (profile_id, action, operator_name, before_data, after_data) VALUES (%s, %s, %s, %s, %s)", (str(profile_id), "confirm", operator, _dumps_obj(before), _dumps_obj(profile)))
         return profile
+
+    def load_active_risk_config(self) -> dict | None:
+        self.initialize()
+        row = self._fetchone("SELECT value FROM metadata WHERE `key`=%s", ("risk_config_active",))
+        return json.loads(row[0]) if row else None
+
+    def load_risk_config_draft(self) -> dict | None:
+        self.initialize()
+        row = self._fetchone("SELECT value FROM metadata WHERE `key`=%s", ("risk_config_draft",))
+        return json.loads(row[0]) if row else None
+
+    def save_risk_config_draft(self, payload: dict, operator: str = "web") -> dict:
+        self.initialize()
+        draft = {**payload, "status": "draft", "pending_confirmation": True, "operator": operator}
+        self._execute(
+            "INSERT INTO metadata (`key`, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=CURRENT_TIMESTAMP",
+            ("risk_config_draft", _dumps_obj(draft)),
+        )
+        return draft
+
+    def confirm_risk_config(self, operator: str = "web") -> dict:
+        self.initialize()
+        row = self._fetchone("SELECT value FROM metadata WHERE `key`=%s", ("risk_config_draft",))
+        if not row:
+            raise ValueError("没有待确认的风险配置草稿。")
+        active = json.loads(row[0])
+        active.update({"status": "active", "pending_confirmation": False, "operator": operator})
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO metadata (`key`, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=VALUES(value), updated_at=CURRENT_TIMESTAMP",
+                    ("risk_config_active", _dumps_obj(active)),
+                )
+                cursor.execute("DELETE FROM metadata WHERE `key`=%s", ("risk_config_draft",))
+        return active
 
     def settle_t_plus_one(self, settle_date: date | None = None) -> bool:
         self.initialize()

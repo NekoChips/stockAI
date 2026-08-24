@@ -164,10 +164,12 @@ def aggregate_signals(
     signal_list = list(signals)
     if not signal_list:
         raise ValueError("缺少策略信号，无法聚合")
+    configured_weights = weights
     weights = weights or {}
+    legacy_aggregation = aggregator is None
     aggregator = aggregator or {}
-    buy_threshold = Decimal(str(aggregator.get("buy_score_threshold", "1.5")))
-    exit_threshold = Decimal(str(aggregator.get("exit_score_threshold", "-1.5")))
+    buy_threshold = Decimal(str(aggregator.get("buy_score_threshold", "1.5" if legacy_aggregation else "0.60")))
+    exit_threshold = Decimal(str(aggregator.get("exit_score_threshold", "-1.5" if legacy_aggregation else "-0.60")))
     conflict_max_weight = Decimal(str(aggregator.get("conflict_max_weight", "0.20")))
     confidence_divisor = Decimal(str(aggregator.get("confidence_divisor", "5")))
     symbol = signal_list[0].symbol
@@ -179,19 +181,31 @@ def aggregate_signals(
     objections: List[str] = []
     positive = 0
     negative = 0
+    effective_weight = Decimal("0")
+    configured_total = sum((Decimal(str(value)) for value in weights.values() if Decimal(str(value)) > 0), Decimal("0")) if configured_weights is not None else Decimal("0")
 
     for signal in signal_list:
-        weight = Decimal(str(weights.get(signal.strategy_id, Decimal("1"))))
+        weight = Decimal(str(Decimal("1") if configured_weights is None else weights.get(signal.strategy_id, Decimal("0"))))
+        if weight <= 0:
+            continue
+        if signal.direction == Direction.WATCH:
+            objections.extend([f"{signal.strategy_id}: {item}" for item in signal.objections])
+            continue
+        effective_weight += weight
         total_weight += weight
-        weighted_score += signal.score * weight
-        if signal.score > 0:
+        normalized_score = signal.score if legacy_aggregation else max(
+            Decimal("-1"),
+            min(Decimal("1"), signal.score / Decimal("2") if signal.score.copy_abs() > 1 else signal.score),
+        )
+        weighted_score += normalized_score * weight
+        if normalized_score > 0:
             positive += 1
-        elif signal.score < 0:
+        elif normalized_score < 0:
             negative += 1
         evidence.extend([f"{signal.strategy_id}: {item}" for item in signal.evidence])
         objections.extend([f"{signal.strategy_id}: {item}" for item in signal.objections])
         is_risk_control = signal.strategy_id in {"volatility_target", "drawdown_control"}
-        if not is_risk_control and signal.target_weight > target_weight and signal.score > 0:
+        if not is_risk_control and signal.target_weight > target_weight and normalized_score > 0:
             target_weight = signal.target_weight
         if is_risk_control and signal.direction in {Direction.REDUCE, Direction.EXIT}:
             risk_caps.append(signal.target_weight)
@@ -202,6 +216,18 @@ def aggregate_signals(
     if risk_caps:
         target_weight = min([target_weight, *risk_caps])
 
+    if configured_weights is not None and (not total_weight or effective_weight < configured_total * Decimal("0.60")):
+        return StrategySignal(
+            "strategy_aggregator",
+            symbol,
+            Direction.WATCH,
+            Decimal("0"),
+            Decimal("0"),
+            target_weight,
+            evidence,
+            objections or ["有效策略权重不足 60%，本轮策略失效。"],
+            "策略数据缺失导致有效权重不足，本轮禁止交易。",
+        )
     average_score = weighted_score / total_weight if total_weight else Decimal("0")
     if positive and negative:
         target_weight = min(target_weight, conflict_max_weight)

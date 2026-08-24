@@ -21,6 +21,7 @@ from .analytics import (
 from .config import AppConfig
 from .web_support import _DASHBOARD_CACHE, _to_jsonable
 from .watchlist import effective_watchlist
+from .risk_config import parse_risk_config, resolve_risk_config, risk_config_payload
 
 
 ANALYSIS_START_DATE = date(2026, 1, 1)
@@ -96,6 +97,14 @@ def build_dashboard_overview_payload(
     backtest_runs = store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else []
     period_returns = compute_period_returns(snapshots)
     daily_returns = period_returns.get("daily", [])
+    draft = store.load_risk_config_draft() if hasattr(store, "load_risk_config_draft") else None
+    if draft:
+        try:
+            risk_payload = risk_config_payload(parse_risk_config(config.risk, draft), status="draft", pending_confirmation=True)
+        except (TypeError, ValueError):
+            risk_payload = risk_config_payload(resolve_risk_config(config, store))
+    else:
+        risk_payload = risk_config_payload(resolve_risk_config(config, store))
     return _to_jsonable(
         {
             "portfolio": {
@@ -111,6 +120,7 @@ def build_dashboard_overview_payload(
             "watchlist": watchlist_rows,
             "market_quotes": latest_quotes,
             "pending_backtest_count": sum(item.get("status") != "已确认" for item in backtest_runs),
+            "risk_config": risk_payload,
         }
     )
 
@@ -235,6 +245,4 @@ def _query_date(values: dict[str, list[str]], name: str) -> date | None:
         return date.fromisoformat(raw)
     except ValueError as exc:
         raise ValueError(f"{name} 必须使用 YYYY-MM-DD 格式。") from exc
-
-
 

@@ -1,6 +1,6 @@
 import unittest
 
-from stock_ai_agent.config import load_config
+from stock_ai_agent.config import InstrumentConfig
 from stock_ai_agent.universe import Universe, UniverseError, normalize_symbol, validate_hs_symbol
 
 
@@ -24,7 +24,10 @@ class UniverseTests(unittest.TestCase):
                 validate_hs_symbol(symbol)
 
     def test_fixed_universe_rejects_unconfigured_symbols(self):
-        universe = Universe.from_config(load_config().universe)
+        universe = Universe.from_config([
+            InstrumentConfig("588170.SH", "etf", "测试 ETF"),
+            InstrumentConfig("588200.SH", "etf", "测试 ETF 2"),
+        ])
 
         self.assertTrue(universe.contains("588170.SH"))
         self.assertTrue(universe.contains("588200"))

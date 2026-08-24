@@ -29,6 +29,8 @@ class Instrument:
     symbol: str
     asset_type: str
     name: str = ""
+    lifecycle_status: str = "observing"
+    trading_enabled: bool = True
 
     @property
     def exchange(self) -> str:
@@ -150,6 +152,7 @@ class Position:
     average_cost: Decimal = Decimal("0")
     last_price: Decimal = Decimal("0")
     realized_pnl: Decimal = Decimal("0")
+    highest_price: Decimal = Decimal("0")
 
     @property
     def market_value(self) -> Decimal:
