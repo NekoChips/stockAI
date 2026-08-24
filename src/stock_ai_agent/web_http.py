@@ -19,8 +19,11 @@ from .web_actions import (
     add_dashboard_watchlist_item,
     confirm_backtest_runs,
     confirm_dashboard_strategy_profile,
+    confirm_dashboard_risk_config,
     remove_dashboard_watchlist_item,
     save_dashboard_strategy_profile,
+    save_dashboard_risk_config,
+    set_dashboard_watchlist_trading,
     search_watchlist_instruments,
 )
 from .web_assets import render_dashboard_html
@@ -255,6 +258,25 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                     return
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
+            if request.path == "/api/risk-config":
+                data = self._read_json_body()
+                if data is None:
+                    return
+                try:
+                    payload = save_dashboard_risk_config(config, store, data)
+                except (TypeError, ValueError) as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/risk-config/confirm":
+                try:
+                    payload = confirm_dashboard_risk_config(config, store)
+                except (TypeError, ValueError) as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
             strategy_confirm_prefix = "/api/strategies/profiles/"
             if request.path.startswith(strategy_confirm_prefix) and request.path.endswith("/confirm"):
                 profile_id = unquote(request.path[len(strategy_confirm_prefix):-len("/confirm")]).strip("/")
@@ -271,6 +293,19 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                     return
                 try:
                     payload = add_dashboard_watchlist_item(config, store, data)
+                except (TypeError, ValueError) as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            trading_prefix = "/api/watchlist/"
+            if request.path.startswith(trading_prefix) and request.path.endswith("/trading"):
+                data = self._read_json_body()
+                if data is None:
+                    return
+                symbol = unquote(request.path[len(trading_prefix):-len("/trading")]).strip("/")
+                try:
+                    payload = set_dashboard_watchlist_trading(config, store, symbol, bool(data.get("enabled")))
                 except (TypeError, ValueError) as exc:
                     _send_error(self, 400, str(exc))
                     return
@@ -299,4 +334,3 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
     server = BoundedThreadingHTTPServer((host, port), DashboardHandler)
     server.serve_forever()
     return server
-

@@ -34,6 +34,8 @@ def effective_watchlist(config: AppConfig, store: Any) -> list[InstrumentConfig]
                 symbol=symbol,
                 asset_type=str(row.get("asset_type") or infer_asset_type(symbol)),
                 name=str((catalog_item or {}).get("name") or row.get("name") or symbol),
+                lifecycle_status=str(row.get("lifecycle_status") or "observing"),
+                trading_enabled=bool(row.get("trading_enabled", 0)),
             )
         )
         seen.add(symbol)
@@ -58,10 +60,21 @@ def add_watchlist_item(
     if resolved_type not in config.allowed_asset_types:
         raise ValueError(f"不支持的标的类型：{resolved_type}")
     catalog_item = _catalog_item(store, normalized)
-    item = InstrumentConfig(normalized, resolved_type, name.strip() or str((catalog_item or {}).get("name") or normalized))
+    item = InstrumentConfig(
+        normalized,
+        resolved_type,
+        name.strip() or str((catalog_item or {}).get("name") or normalized),
+        lifecycle_status="observing",
+        trading_enabled=False,
+    )
+    active_symbols = {row["symbol"] for row in store.load_watchlist_items()} if hasattr(store, "load_watchlist_items") else set()
+    configured_symbols = {configured.symbol for configured in config.universe}
+    removed_symbols = store.load_removed_watchlist_symbols() if hasattr(store, "load_removed_watchlist_symbols") else set()
+    if normalized in (active_symbols | configured_symbols) and normalized not in removed_symbols:
+        raise ValueError(f"标的 {normalized} 已在观察池中，不允许重复添加。")
     if hasattr(store, "restore_watchlist_item"):
         store.restore_watchlist_item(normalized)
-    if normalized not in {configured.symbol for configured in config.universe}:
+    if normalized not in configured_symbols:
         if not hasattr(store, "add_watchlist_item"):
             raise ValueError("当前存储适配器不支持保存手动观察池")
         store.add_watchlist_item(item.symbol, item.name, item.asset_type)
@@ -74,9 +87,21 @@ def remove_watchlist_item(config: AppConfig, store: Any, symbol: str) -> str:
     position = portfolio.positions.get(normalized)
     if position and position.quantity > 0:
         raise ValueError(f"标的 {normalized} 仍有持仓，不能移出观察池")
+    if hasattr(store, "has_pending_orders") and store.has_pending_orders(normalized):
+        raise ValueError(f"标的 {normalized} 存在未完成订单，不能移出观察池")
     if not hasattr(store, "remove_watchlist_item"):
         raise ValueError("当前存储适配器不支持移除观察池标的")
     store.remove_watchlist_item(normalized)
+    return normalized
+
+
+def set_watchlist_trading_enabled(config: AppConfig, store: Any, symbol: str, enabled: bool) -> str:
+    normalized = validate_hs_symbol(symbol)
+    if normalized in {item.symbol for item in config.universe}:
+        raise ValueError("配置文件中的标的不能在页面直接切换交易权限，请通过配置草稿确认。")
+    if not hasattr(store, "set_watchlist_trading_enabled"):
+        raise ValueError("当前存储适配器不支持交易权限配置。")
+    store.set_watchlist_trading_enabled(normalized, bool(enabled))
     return normalized
 
 

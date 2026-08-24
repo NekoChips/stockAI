@@ -59,6 +59,8 @@ class FallbackHistoryDataProvider:
         sleep_fn: Callable[[float], None] = time.sleep,
         failure_threshold: int = 3,
         cooldown_seconds: float = 120.0,
+        fallback_attempts: int = 2,
+        fallback_backoff_seconds: float = 15.0,
     ) -> None:
         self.providers = providers
         self.attempts = max(1, int(attempts))
@@ -66,6 +68,8 @@ class FallbackHistoryDataProvider:
         self.sleep_fn = sleep_fn
         self.last_source = ""
         self._breakers = {name: CircuitBreaker(failure_threshold, cooldown_seconds) for name, _ in providers}
+        self.fallback_attempts = max(1, int(fallback_attempts))
+        self.fallback_backoff_seconds = max(0.0, float(fallback_backoff_seconds))
 
     def get_bars(self, symbol: str, interval: str = "daily", start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         return self._call(
@@ -121,7 +125,7 @@ class FallbackHistoryDataProvider:
 
     def _call(self, method_name: str, **kwargs: object) -> List[Bar]:
         failures: list[str] = []
-        for source_name, provider in self.providers:
+        for provider_index, (source_name, provider) in enumerate(self.providers):
             breaker = self._breakers[source_name]
             if not breaker.allow_request():
                 failures.append(f"{source_name}: 熔断冷却中")
@@ -141,7 +145,9 @@ class FallbackHistoryDataProvider:
             if method is None:
                 failures.append(f"{source_name}: 不支持 {method_name}")
                 continue
-            for attempt in range(self.attempts):
+            attempt_limit = self.attempts if provider_index == 0 else self.fallback_attempts
+            backoff_seconds = self.backoff_seconds if provider_index == 0 else self.fallback_backoff_seconds
+            for attempt in range(attempt_limit):
                 try:
                     bars = method(**call_kwargs)
                     if not bars:
@@ -150,13 +156,13 @@ class FallbackHistoryDataProvider:
                     self.last_source = source_name
                     return bars
                 except Exception as exc:  # noqa: BLE001 - external providers raise mixed exceptions
-                    failures.append(f"{source_name} 第 {attempt + 1}/{self.attempts} 次失败：{exc}")
+                    failures.append(f"{source_name} 第 {attempt + 1}/{attempt_limit} 次失败：{exc}")
                     rate_limited = bool(getattr(exc, "rate_limited", False))
                     breaker.record_failure(rate_limited=rate_limited)
                     if rate_limited:
                         break
-                    if attempt + 1 < self.attempts and self.backoff_seconds > 0:
-                        self.sleep_fn(self.backoff_seconds * (2**attempt))
+                    if attempt + 1 < attempt_limit and backoff_seconds > 0:
+                        self.sleep_fn(backoff_seconds * (2**attempt))
         detail = "；".join(failures)
         raise HistoryDataError(f"历史 K 线所有数据源均失败：{detail}")
 
@@ -260,4 +266,6 @@ def create_history_data_provider(config: AppConfig, provider_name: str | None = 
         backoff_seconds=float(history.get("retry_backoff_seconds", 1)),
         failure_threshold=int(history.get("circuit_breaker_failure_threshold", 3)),
         cooldown_seconds=float(history.get("circuit_breaker_cooldown_seconds", 120)),
+        fallback_attempts=int(history.get("fallback_retry_attempts", 2)),
+        fallback_backoff_seconds=float(history.get("fallback_retry_backoff_seconds", 15)),
     )

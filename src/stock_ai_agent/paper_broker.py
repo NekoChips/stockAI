@@ -34,6 +34,7 @@ class PaperBroker:
             position.average_cost = ((old_cost + gross) / Decimal(new_quantity)).quantize(Decimal("0.0001"))
             position.quantity = new_quantity
             position.last_price = fill_price
+            position.highest_price = max(position.highest_price, fill_price)
             self.portfolio.positions[order.symbol] = position
             self.portfolio.cash = (self.portfolio.cash - cash_needed).quantize(Decimal("0.01"))
         elif order.direction in {Direction.REDUCE, Direction.EXIT}:

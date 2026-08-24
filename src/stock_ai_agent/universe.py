@@ -61,7 +61,15 @@ class Universe:
         instruments = []
         for item in items:
             symbol = validate_hs_symbol(item.symbol, item.asset_type)
-            instruments.append(Instrument(symbol=symbol, asset_type=item.asset_type, name=item.name))
+            instruments.append(
+                Instrument(
+                    symbol=symbol,
+                    asset_type=item.asset_type,
+                    name=item.name,
+                    lifecycle_status=item.lifecycle_status,
+                    trading_enabled=item.trading_enabled,
+                )
+            )
         return cls(instruments)
 
     def contains(self, symbol: str) -> bool:

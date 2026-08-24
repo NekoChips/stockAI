@@ -20,7 +20,7 @@ class StrategyRuntimeTests(unittest.TestCase):
 
         self.assertEqual(resolved["enabled"], ["mean_reversion"])
         self.assertEqual(resolved["weights"]["mean_reversion"], "1")
-        self.assertEqual(resolve_strategy_profile(config, store, "588200.SH", "etf")["enabled"], list(config.strategy.weights))
+        self.assertEqual(resolve_strategy_profile(config, store, "588200.SH", "etf")["enabled"], config.strategy.enabled_by_asset_type["etf"])
 
     def test_unconfirmed_profile_does_not_change_runtime(self):
         config = load_config()
@@ -32,7 +32,7 @@ class StrategyRuntimeTests(unittest.TestCase):
 
         resolved = resolve_strategy_profile(config, store, "588170.SH", "etf")
 
-        self.assertEqual(resolved["enabled"], list(config.strategy.weights))
+        self.assertEqual(resolved["enabled"], config.strategy.enabled_by_asset_type["etf"])
 
     def test_editing_active_profile_keeps_old_revision_until_confirmation(self):
         config = load_config()

@@ -90,10 +90,13 @@ def run_once(
     quote_provider = quote_provider or create_market_data_provider(config)
     decisions: List[Decision] = []
     fills: List[Fill] = []
+    symbol_operations: dict[str, int] = {}
     minimum_history_bars = int(config.data.history.get("monitor_minimum_bars", 35))
-    quotes = fetch_quotes(quote_provider, [instrument.symbol for instrument in universe.instruments])
+    quotes = fetch_quotes(quote_provider, [instrument.symbol for instrument in universe.instruments if instrument.trading_enabled or instrument.symbol in portfolio.positions])
 
     for instrument in universe.instruments:
+        if not instrument.trading_enabled and instrument.symbol not in portfolio.positions:
+            continue
         quote = quotes[instrument.symbol]
         bars = bars_by_symbol.get(instrument.symbol)
         if not bars or len(bars) < minimum_history_bars:
@@ -108,7 +111,7 @@ def run_once(
             peak_values={instrument.symbol: max(config.paper_account.initial_cash, current_value)},
             current_values={instrument.symbol: current_value},
         )
-        profile = profile_from_config(config)
+        profile = profile_from_config(config, asset_type=instrument.asset_type)
         signals = evaluate_strategy_profile(
             profile,
             instrument.symbol,
@@ -118,11 +121,18 @@ def run_once(
             config.risk.high_atr_ratio,
         )
         aggregate = aggregate_signals(signals, profile["weights"], profile["aggregator"])
-        risk_result = risk.evaluate(aggregate, portfolio, quote, daily_trade_count=len(fills))
+        risk_result = risk.evaluate(
+            aggregate,
+            portfolio,
+            quote,
+            daily_trade_count=len(fills),
+            symbol_daily_operation_count=symbol_operations.get(instrument.symbol, 0),
+        )
         decisions.append(risk_result.decision)
         if risk_result.order:
             try:
                 fills.append(broker.execute(risk_result.order))
+                symbol_operations[instrument.symbol] = symbol_operations.get(instrument.symbol, 0) + 1
             except PaperBrokerError as exc:
                 decisions.append(
                     Decision(
@@ -200,7 +210,9 @@ def sync_benchmarks(config: AppConfig, store: MarketDataStore, adapter=None) -> 
 
 
 def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> object:
-    universe = Universe.from_config(config.universe)
+    watchlist = effective_watchlist(config, store)
+    portfolio = store.load_portfolio(config.paper_account.initial_cash)
+    universe = Universe.from_config([item for item in watchlist if item.trading_enabled or item.symbol in portfolio.positions])
     symbols = [instrument.symbol for instrument in universe.instruments]
     interval = str(config.data.history.get("interval", "daily"))
     bars_by_symbol = store.load_bars_batch(symbols, interval=interval)

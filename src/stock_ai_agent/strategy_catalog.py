@@ -67,6 +67,42 @@ STRATEGY_DEFINITIONS = (
         "description_zh": "按权重汇总多个策略信号并处理冲突。",
         "description_en": "Aggregates weighted strategy signals and resolves conflicts.",
     },
+    {
+        "strategy_id": "futures_sentiment",
+        "name_zh": "期货情绪",
+        "name_en": "Futures Sentiment",
+        "category_zh": "市场情绪",
+        "category_en": "Market Sentiment",
+        "description_zh": "使用 IF、IC、IM 期货走势和基差情绪辅助仓位判断。",
+        "description_en": "Uses IF, IC, and IM futures trends and basis sentiment as an allocation factor.",
+    },
+    {
+        "strategy_id": "overseas_sentiment",
+        "name_zh": "海外市场情绪",
+        "name_en": "Overseas Sentiment",
+        "category_zh": "市场情绪",
+        "category_en": "Market Sentiment",
+        "description_zh": "使用美股和韩股收盘数据辅助 A 股风险偏好判断。",
+        "description_en": "Uses US and Korean market closes as an A-share risk appetite factor.",
+    },
+    {
+        "strategy_id": "lhb_follow",
+        "name_zh": "龙虎榜跟随",
+        "name_en": "LHB Follow",
+        "category_zh": "事件量化",
+        "category_en": "Event Quantitative",
+        "description_zh": "根据机构和明星席位的龙虎榜行为生成股票候选信号。",
+        "description_en": "Generates stock candidates from institutional and star-seat LHB activity.",
+    },
+    {
+        "strategy_id": "quant_sector_rotation",
+        "name_zh": "量化行业轮动",
+        "name_en": "Quantitative Sector Rotation",
+        "category_zh": "量化策略",
+        "category_en": "Quantitative",
+        "description_zh": "综合行业收益、换手、机构买入和上涨比例判断行业强弱。",
+        "description_en": "Ranks sectors using returns, turnover, institutional buying, and breadth.",
+    },
 )
 
 
