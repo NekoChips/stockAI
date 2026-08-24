@@ -67,6 +67,13 @@ STRATEGY_DEFINITIONS = (
         "description_zh": "按权重汇总多个策略信号并处理冲突。",
         "description_en": "Aggregates weighted strategy signals and resolves conflicts.",
     },
+    {"strategy_id": "futures_position_sentiment", "name_zh": "期指情绪对冲", "name_en": "Futures Position Sentiment", "category_zh": "风险控制", "category_en": "Risk Control", "description_zh": "以 IC 期指净持仓在市场过热时压低 A 股仓位上限。", "description_en": "Caps A-share exposure when IC futures positioning is overheated."},
+    {"strategy_id": "overseas_market_sentiment", "name_zh": "外围市场情绪", "name_en": "Overseas Market Sentiment", "category_zh": "市场情绪", "category_en": "Market Sentiment", "description_zh": "将美股和韩股板块表现映射为 A 股行业信号。", "description_en": "Maps US and Korean sector moves to A-share sector signals."},
+    {"strategy_id": "lhb_follow_star_seats", "name_zh": "龙虎榜明星席位跟随", "name_en": "LHB Star Seat Follow", "category_zh": "事件量化", "category_en": "Event Quantitative", "description_zh": "跟随满足金额门槛的高胜率明星席位。", "description_en": "Follows high-win-rate star seats above an amount threshold."},
+    {"strategy_id": "lhb_reverse_institutional", "name_zh": "龙虎榜机构反向", "name_en": "LHB Institutional Reversal", "category_zh": "事件量化", "category_en": "Event Quantitative", "description_zh": "机构集中卖出且集合竞价低开时，生成反向观察买入信号。", "description_en": "Generates a reversal signal after institutional selling and a gap down."},
+    {"strategy_id": "lhb_seat_profile", "name_zh": "龙虎榜席位画像", "name_en": "LHB Seat Profile", "category_zh": "事件量化", "category_en": "Event Quantitative", "description_zh": "使用席位历史 T+3 胜率和样本量筛选跟随对象。", "description_en": "Selects seats from T+3 win rates and sample size."},
+    {"strategy_id": "lhb_consensus", "name_zh": "龙虎榜游资机构共振", "name_en": "LHB Consensus", "category_zh": "事件量化", "category_en": "Event Quantitative", "description_zh": "识别明星游资与机构同时净买入。", "description_en": "Detects concurrent star-seat and institutional buying."},
+    {"strategy_id": "lhb_quant_sector", "name_zh": "龙虎榜量化席位板块", "name_en": "LHB Quant Sector", "category_zh": "事件量化", "category_en": "Event Quantitative", "description_zh": "识别量化席位对同一行业的集中买入。", "description_en": "Detects concentrated quant-seat buying in one sector."},
 )
 
 

@@ -1,11 +1,12 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
 from stock_ai_agent.app import run_once_from_store, sync_history
-from stock_ai_agent.config import load_config
+from stock_ai_agent.config import InstrumentConfig, load_config
 from stock_ai_agent.models import Bar, Quote
 from stock_ai_agent.storage.mock import MockMarketDataStore as SQLiteMarketDataStore
 
@@ -53,8 +54,17 @@ class MockQuoteProvider:
 
 
 class AppHistoryTests(unittest.TestCase):
+    def config_with_watchlist(self):
+        return replace(
+            load_config(),
+            universe=[
+                InstrumentConfig("588170.SH", "etf", "测试 ETF"),
+                InstrumentConfig("588200.SH", "etf", "测试 ETF 2"),
+            ],
+        )
+
     def test_sync_history_saves_configured_universe_to_store(self):
-        config = load_config()
+        config = self.config_with_watchlist()
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "market.sqlite3")
             counts = sync_history(config, store, MockHistoryAdapter())
@@ -64,7 +74,7 @@ class AppHistoryTests(unittest.TestCase):
             self.assertEqual(len(store.load_bars("588170.SH")), 40)
 
     def test_run_once_can_load_history_from_store(self):
-        config = load_config()
+        config = self.config_with_watchlist()
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "market.sqlite3")
             sync_history(config, store, MockHistoryAdapter())
@@ -75,7 +85,7 @@ class AppHistoryTests(unittest.TestCase):
             self.assertIsNone(store.load_daily_report(result.report["report_date"]))
 
     def test_sync_history_only_requests_dates_missing_from_database(self):
-        config = load_config()
+        config = self.config_with_watchlist()
         adapter = MockHistoryAdapter()
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "market.sqlite3")

@@ -46,7 +46,13 @@ class MarketDataStore(Protocol):
     def add_watchlist_item(self, symbol: str, name: str, asset_type: str) -> None:
         ...
 
+    def set_watchlist_trading_enabled(self, symbol: str, enabled: bool) -> None:
+        ...
+
     def remove_watchlist_item(self, symbol: str) -> None:
+        ...
+
+    def has_pending_orders(self, symbol: str) -> bool:
         ...
 
     def load_removed_watchlist_symbols(self) -> set[str]:
@@ -67,10 +73,10 @@ class MarketDataStore(Protocol):
     def load_daily_report(self, report_date: date | str) -> dict | None:
         ...
 
-    def load_trading_calendar(self, year: int) -> dict[date, bool] | None:
+    def load_trading_calendar(self, year: int, market: str = "CN") -> dict[date, bool] | None:
         ...
 
-    def save_trading_calendar(self, year: int, trading_days: set[date], source: str, covered_until: date | None = None) -> int:
+    def save_trading_calendar(self, year: int, trading_days: set[date], source: str, covered_until: date | None = None, market: str = "CN") -> int:
         ...
 
     def ensure_strategy_defaults(self, config: Any) -> None:
@@ -86,4 +92,16 @@ class MarketDataStore(Protocol):
         ...
 
     def confirm_strategy_profile(self, profile_id: str, operator: str = "web") -> dict:
+        ...
+
+    def load_active_risk_config(self) -> dict | None:
+        ...
+
+    def load_risk_config_draft(self) -> dict | None:
+        ...
+
+    def save_risk_config_draft(self, payload: dict, operator: str = "web") -> dict:
+        ...
+
+    def confirm_risk_config(self, operator: str = "web") -> dict:
         ...

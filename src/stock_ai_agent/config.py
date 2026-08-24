@@ -15,6 +15,8 @@ class InstrumentConfig:
     symbol: str
     asset_type: str
     name: str = ""
+    lifecycle_status: str = "observing"
+    trading_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -57,16 +59,35 @@ class PaperAccountConfig:
     initial_cash: Decimal
     fee_rate: Decimal
     slippage_rate: Decimal
+    min_commission: Decimal = Decimal("5")
+    stock_sell_stamp_tax: Decimal = Decimal("0.0005")
 
 
 @dataclass(frozen=True)
 class RiskConfig:
     max_symbol_weight: Decimal
+    max_etf_weight: Decimal
+    max_stock_weight: Decimal
+    max_etf_total_weight: Decimal
+    max_stock_total_weight: Decimal
     max_total_exposure: Decimal
     min_cash_ratio: Decimal
+    max_daily_trades: Optional[int]
+    max_operations_per_symbol: int
     max_drawdown: Decimal
-    max_daily_trades: int
+    single_position_loss: Decimal
+    trailing_drawdown: Decimal
+    portfolio_daily_loss: Decimal
     high_atr_ratio: Decimal
+
+    def symbol_limit(self, asset_type: str) -> Decimal:
+        return min(
+            self.max_symbol_weight,
+            self.max_etf_weight if asset_type == "etf" else self.max_stock_weight,
+        )
+
+    def asset_total_limit(self, asset_type: str) -> Decimal:
+        return self.max_etf_total_weight if asset_type == "etf" else self.max_stock_total_weight
 
 
 @dataclass(frozen=True)
@@ -74,9 +95,12 @@ class StrategyConfig:
     target_weight_levels: List[Decimal]
     manual_approval_required: bool
     weights: Dict[str, Decimal]
+    weights_by_asset_type: Dict[str, Dict[str, Decimal]]
+    enabled_by_asset_type: Dict[str, List[str]]
     aggregator: Dict[str, object]
     quant: Dict[str, object]
     technical: Dict[str, object]
+    external: Dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -167,12 +191,16 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
             initial_cash=_decimal(account["initial_cash"]),
             fee_rate=_decimal(account["fee_rate"]),
             slippage_rate=_decimal(account["slippage_rate"]),
+            min_commission=_decimal(account.get("min_commission", "5")),
+            stock_sell_stamp_tax=_decimal(account.get("stock_sell_stamp_tax", "0.0005")),
         ),
         universe=[
             InstrumentConfig(
                 symbol=item["symbol"],
                 asset_type=item["asset_type"],
                 name=item.get("name", ""),
+                lifecycle_status=str(item.get("lifecycle_status", "observing")),
+                trading_enabled=bool(item.get("trading_enabled", True)),
             )
             for item in raw["universe"]
         ],
@@ -186,19 +214,36 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
         ],
         risk=RiskConfig(
             max_symbol_weight=_decimal(risk["max_symbol_weight"]),
+            max_etf_weight=_decimal(risk.get("max_etf_weight", risk["max_symbol_weight"])),
+            max_stock_weight=_decimal(risk.get("max_stock_weight", risk["max_symbol_weight"])),
+            max_etf_total_weight=_decimal(risk.get("max_etf_total_weight", risk["max_total_exposure"])),
+            max_stock_total_weight=_decimal(risk.get("max_stock_total_weight", risk["max_total_exposure"])),
             max_total_exposure=_decimal(risk["max_total_exposure"]),
             min_cash_ratio=_decimal(risk["min_cash_ratio"]),
-            max_drawdown=_decimal(risk["max_drawdown"]),
-            max_daily_trades=int(risk["max_daily_trades"]),
+            max_daily_trades=(None if risk.get("max_daily_trades") in (None, "") else int(risk["max_daily_trades"])),
+            max_operations_per_symbol=int(risk.get("max_operations_per_symbol", 10)),
+            max_drawdown=_decimal(risk.get("max_drawdown", "0.10")),
+            single_position_loss=_decimal(risk.get("single_position_loss", "0.08")),
+            trailing_drawdown=_decimal(risk.get("trailing_drawdown", "0.06")),
+            portfolio_daily_loss=_decimal(risk.get("portfolio_daily_loss", "0.03")),
             high_atr_ratio=_decimal(risk["high_atr_ratio"]),
         ),
         strategy=StrategyConfig(
             target_weight_levels=[_decimal(level) for level in strategy["target_weight_levels"]],
             manual_approval_required=bool(strategy["manual_approval_required"]),
             weights={key: _decimal(value) for key, value in strategy["weights"].items()},
+            weights_by_asset_type={
+                asset_type: {key: _decimal(value) for key, value in values.items()}
+                for asset_type, values in strategy.get("weights_by_asset_type", {}).items()
+            },
+            enabled_by_asset_type={
+                asset_type: [str(value) for value in values]
+                for asset_type, values in strategy.get("enabled_by_asset_type", {}).items()
+            },
             aggregator=dict(strategy.get("aggregator", {})),
             quant=dict(strategy["quant"]),
             technical=dict(strategy.get("technical", {})),
+            external=dict(strategy.get("external", {})),
         ),
         monitor=MonitorConfig(
             poll_seconds=int(monitor.get("poll_seconds", 60)),

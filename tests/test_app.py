@@ -1,9 +1,10 @@
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from stock_ai_agent.app import run_once
-from stock_ai_agent.config import load_config
+from stock_ai_agent.config import InstrumentConfig, load_config
 from stock_ai_agent.models import Bar, Quote
 
 
@@ -49,6 +50,7 @@ def bars(symbol):
 class AppTests(unittest.TestCase):
     def test_run_once_generates_decisions_and_structured_report(self):
         config = load_config()
+        config = replace(config, universe=[InstrumentConfig("588170.SH", "etf", "测试 ETF"), InstrumentConfig("588200.SH", "etf", "测试 ETF 2")])
         histories = {
             "588170.SH": [Decimal("1.00")] * 21 + [Decimal("1.08")],
             "588200.SH": [Decimal("1.00")] * 21 + [Decimal("1.02")],
@@ -63,6 +65,7 @@ class AppTests(unittest.TestCase):
 
     def test_run_once_skips_symbols_with_insufficient_history(self):
         config = load_config()
+        config = replace(config, universe=[InstrumentConfig("588170.SH", "etf", "测试 ETF"), InstrumentConfig("588200.SH", "etf", "测试 ETF 2")])
         histories = {item.symbol: [Decimal("1.00")] * 10 for item in config.universe}
         bars_by_symbol = {symbol: bars(symbol)[:10] for symbol in histories}
 

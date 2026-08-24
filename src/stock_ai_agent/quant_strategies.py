@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from .models import Direction, FeatureSet, StrategySignal
 
@@ -16,6 +16,20 @@ class QuantContext:
 
     def current_weight(self, symbol: str) -> Decimal:
         return self.current_weights.get(symbol, Decimal("0"))
+
+
+@dataclass(frozen=True)
+class ExternalStrategyContext:
+    """Persisted external-market evidence. It can influence A-share signals only."""
+
+    futures: Dict[str, Any] | None = None
+    overseas: Dict[str, Dict[str, Any]] | None = None
+    lhb_records: List[Dict[str, Any]] | None = None
+    sector: str = "综合"
+    auction_gap_pct: Decimal | None = None
+    star_seats: set[str] | None = None
+    seat_profiles: Dict[str, Dict[str, Any]] | None = None
+    quant_seats: Dict[str, Dict[str, Any]] | None = None
 
 
 def _return(history: List[Decimal], lookback: int) -> Decimal | None:
@@ -121,6 +135,181 @@ class DrawdownControlStrategy:
         # as a target-position cap by the aggregator, otherwise an empty account
         # can never open its first position.
         return _signal(self.strategy_id, symbol, Direction.HOLD, Decimal("0.5"), Decimal("1"), [f"策略回撤 {drawdown:.2%}，未触发止损。"])
+
+
+class FuturesPositionSentimentStrategy:
+    strategy_id = "futures_position_sentiment"
+
+    def __init__(self, options: Dict[str, Any]) -> None:
+        self.overheated = Decimal(str(options.get("bullish_threshold", "0.60")))
+        self.cap = Decimal(str(options.get("overheated_cap", "0.40")))
+
+    def evaluate(self, symbol: str, features: FeatureSet, context: ExternalStrategyContext) -> StrategySignal:
+        del features
+        row = context.futures or {}
+        value = row.get("combined_net_ratio")
+        if value is None:
+            return _watch(self.strategy_id, symbol, "期指持仓数据缺失或已过期，禁止该策略触发交易。")
+        ratio = Decimal(str(value))
+        if ratio > self.overheated:
+            return _signal(self.strategy_id, symbol, Direction.REDUCE, Decimal("0"), self.cap, [f"期指综合净多持仓 {ratio:.1%} 超过 {self.overheated:.0%}，将 A 股仓位上限压至 {self.cap:.0%}。"])
+        return _signal(self.strategy_id, symbol, Direction.HOLD, Decimal("0"), Decimal("1"), [f"期指综合净持仓 {ratio:.1%}，未施加仓位约束。"])
+
+
+class OverseasMarketSentimentStrategy:
+    strategy_id = "overseas_market_sentiment"
+    sector_to_us = {"信息技术": "XLK", "医药卫生": "XLV", "金融地产": "XLF", "能源": "XLE", "工业": "XLI", "可选消费": "XLY", "必需消费": "XLP", "公用事业": "XLU", "材料": "XLB", "电信服务": "XLC"}
+
+    def __init__(self, options: Dict[str, Any]) -> None:
+        self.options = options
+
+    def evaluate(self, symbol: str, features: FeatureSet, context: ExternalStrategyContext) -> StrategySignal:
+        del features
+        data = context.overseas or {}
+        sector_code = self.sector_to_us.get(context.sector)
+        if not sector_code or sector_code not in data or "^IXIC" not in data or "^GSPC" not in data or "^DJI" not in data:
+            return _watch(self.strategy_id, symbol, "外围市场数据或标的行业映射不完整，禁止该策略触发交易。")
+        get = lambda key: Decimal(str(data.get(key, {}).get("change_pct", "0")))
+        score = Decimal("0")
+        evidence: list[str] = []
+        sector_change = get(sector_code)
+        if sector_change >= Decimal(str(self.options.get("us_sector_bullish", "2"))):
+            score += Decimal(str(self.options.get("us_sector_weight", "2")))
+            evidence.append(f"美股 {sector_code} 涨幅 {sector_change:.1f}% 强于阈值。")
+        elif sector_change <= Decimal(str(self.options.get("us_sector_bearish", "-2"))):
+            score -= Decimal(str(self.options.get("us_sector_weight", "2")))
+            evidence.append(f"美股 {sector_code} 跌幅 {sector_change:.1f}% 弱于阈值。")
+        nasdaq = get("^IXIC")
+        if context.sector in self.options.get("nasdaq_correlated_sectors", ["信息技术"]):
+            if nasdaq >= Decimal(str(self.options.get("nasdaq_bullish", "1.5"))):
+                score += Decimal(str(self.options.get("nasdaq_weight", "1.5")))
+                evidence.append(f"纳斯达克上涨 {nasdaq:.1f}% 。")
+            elif nasdaq <= Decimal(str(self.options.get("nasdaq_bearish", "-1.5"))):
+                score -= Decimal(str(self.options.get("nasdaq_weight", "1.5")))
+        kr = get("KOSPI_IT")
+        if context.sector in self.options.get("kr_tech_correlated_sectors", ["信息技术"]) and kr and sector_change * kr > 0:
+            score += Decimal(str(self.options.get("kr_tech_weight", "1"))) * (Decimal("1") if kr > 0 else Decimal("-1"))
+            evidence.append(f"韩股科技与美股板块同向 {kr:.1f}% 。")
+        broad = [get("^IXIC"), get("^GSPC"), get("^DJI")]
+        if all(value > 0 for value in broad):
+            score += Decimal("0.5")
+        elif all(value < 0 for value in broad):
+            score -= Decimal("0.5")
+        if score >= Decimal(str(self.options.get("strong_buy_score", "2.5"))):
+            return _signal(self.strategy_id, symbol, Direction.BUY, score, Decimal(str(self.options.get("strong_buy_weight", "0.40"))), evidence)
+        if score >= Decimal(str(self.options.get("buy_score", "1.5"))):
+            return _signal(self.strategy_id, symbol, Direction.BUY, score, Decimal(str(self.options.get("buy_weight", "0.30"))), evidence)
+        if score <= Decimal(str(self.options.get("strong_reduce_score", "-2"))):
+            return _signal(self.strategy_id, symbol, Direction.REDUCE, score, Decimal(str(self.options.get("strong_reduce_weight", "0.10"))), [], evidence)
+        if score <= Decimal(str(self.options.get("reduce_score", "-1"))):
+            return _signal(self.strategy_id, symbol, Direction.REDUCE, score, Decimal(str(self.options.get("reduce_weight", "0.20"))), [], evidence)
+        return _signal(self.strategy_id, symbol, Direction.HOLD, score, Decimal("0"), evidence or ["外围市场信号中性。"])
+
+
+def _seat_rows(record: Dict[str, Any], side: str) -> list[tuple[str, Decimal]]:
+    rows = []
+    for index in range(1, 6):
+        seat = str(record.get(f"{side}_seat_{index}") or "")
+        amount = Decimal(str(record.get(f"{side}_amount_{index}") or "0"))
+        if seat:
+            rows.append((seat, amount))
+    return rows
+
+
+class _LhbStrategy:
+    def _record(self, symbol: str, context: ExternalStrategyContext) -> Dict[str, Any] | None:
+        return next((row for row in context.lhb_records or [] if row.get("symbol") == symbol), None)
+
+
+class LhbFollowStarSeatsStrategy(_LhbStrategy):
+    strategy_id = "lhb_follow_star_seats"
+    def __init__(self, options: Dict[str, Any]) -> None: self.options = options
+    def evaluate(self, symbol: str, features: FeatureSet, context: ExternalStrategyContext) -> StrategySignal:
+        del features
+        record = self._record(symbol, context)
+        if not record:
+            return _watch(self.strategy_id, symbol, "龙虎榜数据尚未同步。") if context.lhb_records is None else _signal(self.strategy_id, symbol, Direction.HOLD, Decimal("0"), Decimal("0"), ["最近龙虎榜没有该标的记录。"])
+        stars = context.star_seats or set(self.options.get("star_seats", []))
+        minimum = Decimal(str(self.options.get("min_buy_amount", "1000")))
+        matches = [seat for seat, amount in _seat_rows(record, "buy") if seat in stars and amount >= minimum]
+        return _signal(self.strategy_id, symbol, Direction.BUY, Decimal(str(self.options.get("signal_score", "1"))), Decimal("0"), [f"明星席位 {matches[0]} 昨日买入达阈值。"] ) if matches else _watch(self.strategy_id, symbol, "龙虎榜未出现满足金额阈值的明星买入席位。")
+
+
+class LhbReverseInstitutionalStrategy(_LhbStrategy):
+    strategy_id = "lhb_reverse_institutional"
+    def __init__(self, options: Dict[str, Any]) -> None: self.options = options
+    def evaluate(self, symbol: str, features: FeatureSet, context: ExternalStrategyContext) -> StrategySignal:
+        del features
+        record = self._record(symbol, context)
+        if context.lhb_records is None or context.auction_gap_pct is None:
+            return _watch(self.strategy_id, symbol, "机构龙虎榜或集合竞价低开数据缺失。")
+        if not record:
+            return _signal(self.strategy_id, symbol, Direction.HOLD, Decimal("0"), Decimal("0"), ["最近龙虎榜没有该标的记录。"])
+        minimum = Decimal(str(self.options.get("min_sell_amount", "500")))
+        count = sum(1 for seat, amount in _seat_rows(record, "sell") if seat == "机构专用" and amount >= minimum)
+        if count >= int(self.options.get("min_institutional_count", 3)) and context.auction_gap_pct <= Decimal(str(self.options.get("min_gap_down", "-3"))):
+            return _signal(self.strategy_id, symbol, Direction.BUY, Decimal(str(self.options.get("signal_score", "1.5"))), Decimal(str(self.options.get("target_weight", "0.20"))), [f"{count} 个机构席位集中卖出且集合竞价低开 {context.auction_gap_pct:.1f}% 。"])
+        return _watch(self.strategy_id, symbol, "机构恐慌卖出与低开条件未同时满足。")
+
+
+class LhbSeatProfileStrategy(_LhbStrategy):
+    strategy_id = "lhb_seat_profile"
+    def __init__(self, options: Dict[str, Any]) -> None: self.options = options
+    def evaluate(self, symbol: str, features: FeatureSet, context: ExternalStrategyContext) -> StrategySignal:
+        del features
+        record = self._record(symbol, context)
+        if not record:
+            return _watch(self.strategy_id, symbol, "龙虎榜数据尚未同步。") if context.lhb_records is None else _signal(self.strategy_id, symbol, Direction.HOLD, Decimal("0"), Decimal("0"), ["最近龙虎榜没有该标的记录。"])
+        minimum = Decimal(str(self.options.get("min_buy_amount", "1000")))
+        profiles = context.seat_profiles or {}
+        candidates = [profiles.get(seat) for seat, amount in _seat_rows(record, "buy") if amount >= minimum and profiles.get(seat)]
+        candidates = [item for item in candidates if Decimal(str(item.get("t3_win_rate", "0"))) >= Decimal(str(self.options.get("min_win_rate", "0.60"))) and int(item.get("buy_count", 0)) >= int(self.options.get("min_sample_size", 20))]
+        if not candidates:
+            return _watch(self.strategy_id, symbol, "龙虎榜买入席位没有满足胜率和样本量门槛。")
+        rate = max(Decimal(str(item.get("t3_win_rate", "0"))) for item in candidates)
+        score = Decimal("2") if rate >= Decimal("0.80") else Decimal("1.5") if rate >= Decimal("0.70") else Decimal("1")
+        return _signal(self.strategy_id, symbol, Direction.BUY, score, Decimal("0"), [f"席位历史 T+3 胜率 {rate:.1%}，样本充分。"])
+
+
+class LhbConsensusStrategy(_LhbStrategy):
+    strategy_id = "lhb_consensus"
+    def __init__(self, options: Dict[str, Any]) -> None: self.options = options
+    def evaluate(self, symbol: str, features: FeatureSet, context: ExternalStrategyContext) -> StrategySignal:
+        del features
+        record = self._record(symbol, context)
+        if not record:
+            return _watch(self.strategy_id, symbol, "龙虎榜数据尚未同步。") if context.lhb_records is None else _signal(self.strategy_id, symbol, Direction.HOLD, Decimal("0"), Decimal("0"), ["最近龙虎榜没有该标的记录。"])
+        minimum = Decimal(str(self.options.get("min_buy_amount", "1000")))
+        rows = _seat_rows(record, "buy")
+        stars = context.star_seats or set(self.options.get("star_seats", []))
+        if any(seat in stars and amount >= minimum for seat, amount in rows) and any(seat == "机构专用" and amount >= minimum for seat, amount in rows):
+            return _signal(self.strategy_id, symbol, Direction.BUY, Decimal(str(self.options.get("signal_score", "2.5"))), Decimal("0"), ["明星游资与机构席位同时净买入。"])
+        return _watch(self.strategy_id, symbol, "未形成明星游资与机构买入共振。")
+
+
+class LhbQuantSectorStrategy(_LhbStrategy):
+    strategy_id = "lhb_quant_sector"
+    def __init__(self, options: Dict[str, Any]) -> None: self.options = options
+    def evaluate(self, symbol: str, features: FeatureSet, context: ExternalStrategyContext) -> StrategySignal:
+        del features
+        if context.lhb_records is None:
+            return _watch(self.strategy_id, symbol, "量化席位策略所需龙虎榜数据尚未同步。")
+        records = context.lhb_records
+        quant_seats = context.quant_seats or {}
+        minimum = Decimal(str(self.options.get("min_buy_amount", "500")))
+        by_firm: dict[str, int] = {}
+        for record in records:
+            if str(record.get("sector") or "") != context.sector:
+                continue
+            for seat, amount in _seat_rows(record, "buy"):
+                firm = quant_seats.get(seat, {}).get("quant_firm")
+                if firm and amount >= minimum:
+                    by_firm[str(firm)] = by_firm.get(str(firm), 0) + 1
+        required = int(self.options.get("min_symbols_in_sector", 3))
+        firm = next((name for name, count in by_firm.items() if count >= required), None)
+        if firm:
+            return _signal(self.strategy_id, symbol, Direction.BUY, Decimal(str(self.options.get("signal_score", "1"))), Decimal("0"), [f"量化机构 {firm} 集中买入 {context.sector} 板块 {by_firm[firm]} 只标的。"])
+        return _watch(self.strategy_id, symbol, "未观察到量化席位对所属板块的集中买入。")
 
 
 def _watch(strategy_id: str, symbol: str, reason: str) -> StrategySignal:

@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from stock_ai_agent.config import load_config
+from stock_ai_agent.config import InstrumentConfig, load_config
 from stock_ai_agent.models import Direction, Portfolio, Position, Quote, StrategySignal
 from stock_ai_agent.risk import RiskEngine
 from stock_ai_agent.universe import Universe
@@ -35,7 +35,10 @@ def signal(direction=Direction.BUY, target=Decimal("0.20"), symbol="588170.SH"):
 class RiskTests(unittest.TestCase):
     def setUp(self):
         config = load_config()
-        self.engine = RiskEngine(config.risk, Universe.from_config(config.universe))
+        self.engine = RiskEngine(config.risk, Universe.from_config([
+            InstrumentConfig("588170.SH", "etf", "测试 ETF"),
+            InstrumentConfig("588200.SH", "etf", "测试 ETF 2"),
+        ]))
 
     def test_buy_order_respects_lot_size(self):
         result = self.engine.evaluate(signal(), Portfolio(Decimal("1000000")), quote())
@@ -63,7 +66,7 @@ class RiskTests(unittest.TestCase):
         self.assertFalse(result.decision.approved)
         self.assertIn("可卖数量不足", result.decision.reasons[0])
 
-    def test_buy_respects_combined_portfolio_exposure(self):
+    def test_buy_respects_combined_portfolio_and_etf_exposure(self):
         portfolio = Portfolio(
             Decimal("400000"),
             {
@@ -72,12 +75,18 @@ class RiskTests(unittest.TestCase):
         )
         result = self.engine.evaluate(signal(target=Decimal("0.60"), symbol="588200.SH"), portfolio, quote("588200.SH"))
 
+        self.assertFalse(result.decision.approved)
+        self.assertIsNone(result.order)
+        self.assertIn("总仓位", "；".join(result.decision.reasons))
+
+    def test_max_drawdown_reduces_to_half_instead_of_exiting(self):
+        portfolio = Portfolio(Decimal("20000"), {"588170.SH": Position("588170.SH", 40000, 40000, Decimal("1"), Decimal("1"))})
+        result = self.engine.evaluate(signal(Direction.HOLD, Decimal("0.60")), portfolio, quote(), historical_peak=Decimal("100000"))
+
         self.assertTrue(result.decision.approved)
         self.assertIsNotNone(result.order)
-        self.assertLessEqual(
-            (portfolio.total_market_value() + result.order.notional) / portfolio.total_asset(),
-            Decimal("0.90"),
-        )
+        self.assertEqual(result.order.direction, Direction.REDUCE)
+        self.assertEqual(result.decision.target_weight, Decimal("0.30"))
 
 
 if __name__ == "__main__":

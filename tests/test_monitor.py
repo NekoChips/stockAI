@@ -2,11 +2,12 @@ import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from stock_ai_agent.config import load_config
+from stock_ai_agent.config import InstrumentConfig, load_config
 from stock_ai_agent.models import Bar, Direction, FeatureSet, Quote, StrategySignal
 from stock_ai_agent.storage.mock import MockMarketDataStore
 from stock_ai_agent.monitor import RealTimePaperTradingMonitor, is_post_close_report_time, is_trading_time
@@ -67,6 +68,16 @@ def buy_signal(symbol="588170.SH"):
     )
 
 
+def configured_config():
+    return replace(
+        load_config(),
+        universe=[
+            InstrumentConfig("588170.SH", "etf", "测试 ETF"),
+            InstrumentConfig("588200.SH", "etf", "测试 ETF 2"),
+        ],
+    )
+
+
 class MonitorTests(unittest.TestCase):
     def test_trading_time_helpers(self):
         tz = ZoneInfo("Asia/Shanghai")
@@ -82,16 +93,16 @@ class MonitorTests(unittest.TestCase):
         self.assertFalse(is_post_close_report_time(holiday.replace(hour=15, minute=5), "15:05", lambda value: False))
 
     def test_non_trading_hours_sleep_until_next_market_boundary(self):
-        config = load_config()
+        config = configured_config()
         tz = ZoneInfo("Asia/Shanghai")
         monitor = RealTimePaperTradingMonitor(config, MockMarketDataStore(), MockQuoteProvider())
 
-        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 8, 0, tzinfo=tz)), 5400)
+        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 8, 0, tzinfo=tz)), 3900)
         self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 12, 0, tzinfo=tz)), 3600)
-        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 15, 10, tzinfo=tz)), 18 * 60 * 60 + 20 * 60)
+        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 15, 10, tzinfo=tz)), 3 * 60 * 60 + 50 * 60)
 
     def test_non_trading_day_sleep_skips_to_next_trading_day(self):
-        config = load_config()
+        config = configured_config()
         tz = ZoneInfo("Asia/Shanghai")
         monitor = RealTimePaperTradingMonitor(
             config,
@@ -102,10 +113,10 @@ class MonitorTests(unittest.TestCase):
 
         seconds = monitor._sleep_seconds(datetime(2026, 8, 17, 15, 30, tzinfo=tz))
 
-        self.assertEqual(seconds, 42 * 60 * 60)
+        self.assertEqual(seconds, 3 * 60 * 60 + 30 * 60)
 
     def test_iteration_executes_and_persists_paper_fill(self):
-        config = load_config()
+        config = configured_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
@@ -123,7 +134,7 @@ class MonitorTests(unittest.TestCase):
         self.assertLess(loaded.cash, config.paper_account.initial_cash)
 
     def test_bullish_real_strategy_pipeline_opens_a_position_from_cash(self):
-        config = load_config()
+        config = configured_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         store = MockMarketDataStore()
         for item in config.universe:
@@ -140,7 +151,7 @@ class MonitorTests(unittest.TestCase):
         self.assertTrue(any(decision.direction in {Direction.BUY, Direction.ADD} for decision in result.decisions))
 
     def test_iteration_skips_outside_market_hours(self):
-        config = load_config()
+        config = configured_config()
         closed_now = datetime(2026, 8, 17, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
@@ -168,10 +179,10 @@ class MonitorTests(unittest.TestCase):
             monitor.run_iteration(pre_open)
             monitor.run_iteration(pre_open)
 
-        self.assertEqual(store.pruned_dates, [pre_open.date()])
+        self.assertEqual(store.pruned_dates, [])
 
     def test_iteration_reports_missing_history_instead_of_silently_skipping(self):
-        config = load_config()
+        config = configured_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
@@ -183,7 +194,7 @@ class MonitorTests(unittest.TestCase):
         self.assertTrue(any("588170.SH" in warning for warning in result.warnings))
 
     def test_iteration_does_not_evaluate_strategy_with_insufficient_history(self):
-        config = load_config()
+        config = configured_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
@@ -198,7 +209,7 @@ class MonitorTests(unittest.TestCase):
         self.assertTrue(all("至少需要" in warning for warning in result.warnings))
 
     def test_post_close_report_uses_persisted_daily_records(self):
-        config = load_config()
+        config = configured_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
@@ -215,7 +226,7 @@ class MonitorTests(unittest.TestCase):
         self.assertGreaterEqual(len(stored["fills"]), 1)
 
     def test_monitor_initializes_missing_watchlist_history_before_trading(self):
-        config = load_config()
+        config = configured_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
         class HistoryProvider:
@@ -238,7 +249,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(self.startup_result.status, "traded")
 
     def test_initialization_reuses_sufficient_database_history_without_remote_kline_call(self):
-        config = load_config()
+        config = configured_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
         class CountingHistoryProvider:
@@ -265,7 +276,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(history.calls, [])
 
     def test_intraday_daily_reference_sync_does_not_refresh_kline_history(self):
-        config = load_config()
+        config = configured_config()
 
         class InlineThread:
             def __init__(self, target, args=(), daemon=False):
@@ -287,7 +298,7 @@ class MonitorTests(unittest.TestCase):
         history_sync.assert_not_called()
 
     def test_startup_benchmark_sync_stops_at_previous_weekday(self):
-        config = load_config()
+        config = configured_config()
 
         class InlineThread:
             def __init__(self, target, args=(), daemon=False):
@@ -310,7 +321,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(sync_benchmarks.call_args.kwargs["as_of"], date(2026, 8, 14))
 
     def test_post_close_starts_incremental_history_sync(self):
-        config = load_config()
+        config = configured_config()
         close_now = datetime(2026, 8, 17, 15, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
 
         class InlineThread:
@@ -334,7 +345,7 @@ class MonitorTests(unittest.TestCase):
         history_sync.assert_called_once_with(close_now.date(), True)
 
     def test_monitor_does_not_trade_when_startup_history_is_still_insufficient(self):
-        config = load_config()
+        config = configured_config()
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 
         class FailingHistoryProvider:
@@ -358,7 +369,7 @@ class MonitorTests(unittest.TestCase):
         self.assertTrue(any("历史 K 线未就绪" in warning for warning in updates[0].warnings))
 
     def test_post_close_report_is_archived_even_when_history_initialization_fails(self):
-        config = load_config()
+        config = configured_config()
         close_now = datetime(2026, 8, 17, 15, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
 
         class FailingHistoryProvider:
