@@ -8,7 +8,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from stock_ai_agent.config import InstrumentConfig, load_config
-from stock_ai_agent.models import Bar, Direction, FeatureSet, Quote, StrategySignal
+from stock_ai_agent.models import Bar, Decision, Direction, FeatureSet, Quote, StrategySignal
 from stock_ai_agent.storage.mock import MockMarketDataStore
 from stock_ai_agent.monitor import RealTimePaperTradingMonitor, is_post_close_report_time, is_trading_time
 from stock_ai_agent.storage.mock import MockMarketDataStore as SQLiteMarketDataStore
@@ -224,6 +224,24 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(report["report_date"], "2026-08-17")
         self.assertEqual(stored["report_date"], "2026-08-17")
         self.assertGreaterEqual(len(stored["fills"]), 1)
+
+    def test_post_close_report_moves_watchlist_to_dormant_after_repeated_watch_decisions(self):
+        config = configured_config()
+        report_date = date(2026, 8, 17)
+        symbol = config.universe[0].symbol
+        store = MockMarketDataStore()
+        store.add_watchlist_item(symbol, config.universe[0].name, config.universe[0].asset_type)
+        for offset in range(20):
+            store.record_decision(
+                Decision(symbol, Direction.WATCH, Decimal("0"), True, ["测试观望"]),
+                report_date - timedelta(days=offset + 1),
+            )
+
+        monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
+        report = monitor.generate_post_close_report(report_date)
+
+        self.assertEqual(report["report_date"], report_date.isoformat())
+        self.assertEqual(store.load_watchlist_items()[0]["lifecycle_status"], "dormant")
 
     def test_monitor_initializes_missing_watchlist_history_before_trading(self):
         config = configured_config()

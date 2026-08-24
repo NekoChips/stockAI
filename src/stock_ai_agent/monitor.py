@@ -17,7 +17,7 @@ from .lhb_backtest import refresh_lhb_seat_profiles
 from .features import build_features
 from .history_sync import missing_history_range, previous_weekday
 from .journal import build_daily_report
-from .models import Bar, Decision, Fill, OrderStatus, Portfolio
+from .models import Bar, Decision, Direction, Fill, OrderStatus, Portfolio
 from .paper_broker import PaperBroker, PaperBrokerError
 from .quant_strategies import QuantContext
 from .risk import RiskEngine
