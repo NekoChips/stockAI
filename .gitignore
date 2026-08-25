@@ -43,3 +43,6 @@ config/*.local.yaml
 config/*.secret.yaml
 docker/.env.release
 dist/
+
+.worktrees/
+.superpowers/
