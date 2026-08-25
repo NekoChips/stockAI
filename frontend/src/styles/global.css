@@ -12,3 +12,14 @@ body {
 .gain { color: var(--gain); }
 .loss { color: var(--loss); }
 .tabular { font-variant-numeric: tabular-nums; font-family: "Fira Code", ui-monospace, monospace; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
