@@ -21,6 +21,10 @@ StockAI 是面向沪深 A 股股票与 ETF 的模拟盘 AI-Agent。它使用公�
 
 Web 层按职责拆分为数据组装、写操作、健康检查、HTTP 路由、静态资源和公共响应工具模块；`stock_ai_agent.web` 保留为兼容导入入口。
 
+## Web UI（双入口）
+
+Web 看板目前提供两个入口：`/` 为 legacy 单页 HTML，`/app` 为 React + Ant Design SPA（开发中，切主入口前需完成 parity 验收）。本地 SPA 热更新：`cd frontend && npm run dev`（Vite :5173，API 代理至 Python :8765）；生产或联调可先 `npm run build` 后由 Python 在 `/app` 提供静态资源。验收清单见 [docs/superpowers/parity-checklist.md](./docs/superpowers/parity-checklist.md)。
+
 ## v0.1.3 数据结构升级
 
 本版本首次连接 MySQL 时会自动创建订单状态机、决策轨迹、外部市场分析、龙虎榜席位画像及三轨价格表。历史 K 线同时保存原始价、前复权价和复权因子：模拟成交、持仓估值和收益使用原始价；技术指标、趋势与回测使用前复权价。
