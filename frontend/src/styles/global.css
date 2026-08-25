@@ -185,10 +185,146 @@ body {
   margin-top: 7px;
   font: 650 13px/1 "Fira Code", ui-monospace, monospace;
 }
+.instrument-detail { display: grid; gap: 20px; }
+.detail-back { width: max-content; }
+.instrument-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(132px, 0.7fr));
+  border-bottom: 1px solid #edf1f6;
+}
+.instrument-summary,
+.instrument-stat {
+  min-width: 0;
+  padding: 20px;
+  border-right: 1px solid #edf1f6;
+}
+.instrument-stat:last-child { border-right: 0; }
+.instrument-symbol {
+  margin-top: 5px;
+  color: var(--subtle);
+  font: 500 13px/1.2 "Fira Code", ui-monospace, monospace;
+}
+.instrument-name { margin-top: 4px !important; overflow-wrap: anywhere; }
+.instrument-stat strong {
+  display: block;
+  margin-top: 7px;
+  font: 700 19px/1.1 "Fira Code", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.instrument-stat .stat-note {
+  display: block;
+  margin-top: 5px;
+  color: var(--subtle);
+  font-size: 12px;
+}
+.instrument-chart-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #edf1f6;
+}
+.instrument-period-tabs {
+  display: flex;
+  min-width: 0;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.instrument-period-tabs button {
+  flex: none;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--subtle);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.instrument-period-tabs button.active {
+  border-color: #a9c8f7;
+  background: #f8fbff;
+  color: var(--blue-dark);
+}
+.instrument-chart-note {
+  flex: none;
+  color: var(--subtle);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.instrument-chart-wrap {
+  position: relative;
+  height: 430px;
+  padding: 12px 10px 8px;
+}
+.instrument-chart-wrap canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  outline: none;
+}
+.instrument-chart-tooltip { max-width: min(300px, calc(100% - 16px)); min-width: 184px; }
+.instrument-detail-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.75fr);
+  border-top: 1px solid #edf1f6;
+}
+.instrument-detail-section {
+  min-width: 0;
+  padding: 18px 20px;
+  border-right: 1px solid #edf1f6;
+}
+.instrument-detail-section:last-child { border-right: 0; }
+.trade-marker-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  max-height: 190px;
+  overflow: auto;
+}
+.trade-marker-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid #edf1f6;
+  font-size: 12px;
+}
+.trade-marker-item:first-child { border-top: 0; padding-top: 0; }
+.trade-marker-item time {
+  color: var(--subtle);
+  font: 500 11px/1.2 "Fira Code", ui-monospace, monospace;
+  white-space: nowrap;
+}
 @media (max-width: 768px) {
   .chart-wrap { height: 286px; }
   .calendar-cell { min-height: 56px; }
   .outperformance-grid { grid-template-columns: 1fr; }
+  .instrument-chart-tools {
+    align-items: flex-start;
+    flex-direction: column;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+  .instrument-chart-wrap { height: 320px; padding-right: 2px; padding-left: 2px; }
+  .instrument-detail-footer { grid-template-columns: 1fr; }
+  .instrument-detail-section {
+    padding: 18px 16px;
+    border-right: 0;
+    border-bottom: 1px solid #edf1f6;
+  }
+  .instrument-detail-section:last-child { border-bottom: 0; }
+  .instrument-hero { grid-template-columns: 1fr; }
+  .instrument-summary,
+  .instrument-stat { border-right: 0; border-bottom: 1px solid #edf1f6; }
+  .instrument-stat:last-child { border-bottom: 0; }
 }
 .watch-row td { background: #fbfdff; }
 .tabular { font-variant-numeric: tabular-nums; font-family: "Fira Code", ui-monospace, monospace; }
