@@ -35,7 +35,7 @@ env/
 data/*.sqlite3
 data/*.sqlite3-*
 data/backups/
-reports/
+/reports/
 .learnings/
 
 # Deployment-only configuration and credentials
