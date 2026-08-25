@@ -27,10 +27,32 @@ from stock_ai_agent.web import (
     _send,
 )
 from stock_ai_agent.web_actions import confirm_dashboard_strategy_profile, save_dashboard_strategy_profile
+from stock_ai_agent.web_actions import set_dashboard_watchlist_trading
 from stock_ai_agent.web_dashboard import build_dashboard_strategies_payload
 
 
 class WebDashboardTests(unittest.TestCase):
+    def test_new_strategy_profile_gets_server_generated_id(self):
+        config = load_config()
+        store = SQLiteMarketDataStore()
+
+        saved = save_dashboard_strategy_profile(
+            config,
+            store,
+            {
+                "name_zh": "自动生成 ID 的组合",
+                "name_en": "Generated Profile",
+                "scope_type": "asset_type",
+                "scope_value": "etf",
+                "enabled": ["mean_reversion"],
+                "weights": {"mean_reversion": "1"},
+            },
+        )
+
+        profile_id = saved["saved_profile_id"]
+        self.assertTrue(profile_id.startswith("profile_"))
+        self.assertIn(profile_id, {item["profile_id"] for item in saved["strategies"]["profiles"]})
+
     def test_strategy_center_persists_draft_and_confirmation(self):
         config = load_config()
         store = SQLiteMarketDataStore()
@@ -411,7 +433,62 @@ class WebDashboardTests(unittest.TestCase):
             payload = confirm_backtest_runs(config, store, [run_id])
 
         self.assertEqual(payload["updated"], 1)
-        self.assertEqual(payload["backtest_runs"][0]["status"], "已确认")
+        self.assertEqual(payload["backtest_runs"][0]["status"], "待下一轮生效")
+        profile = next(item for item in store.load_strategy_center(config)["profiles"] if item["profile_id"] == "default")
+        self.assertTrue(profile["pending_activation"])
+        self.assertEqual(profile["source_backtest_id"], run_id)
+
+    def test_confirmed_backtest_is_applied_by_next_monitor_round(self):
+        config = load_config()
+        store = SQLiteMarketDataStore()
+        store.ensure_strategy_defaults(config)
+        store.record_backtest_run(
+            "momentum_grid",
+            {"lookback_days": 5, "threshold": "0.04", "target_weight": "0.40"},
+            {"total_return": "0.05"},
+            "待人工确认",
+        )
+        run_id = store.load_backtest_runs()[0]["id"]
+
+        confirm_backtest_runs(config, store, [run_id])
+        applied = store.apply_pending_strategy_profiles()
+        self.assertEqual(applied[0]["profile_id"], "default")
+        self.assertEqual(store.load_active_strategy_profile("588170.SH", "etf")["quant"]["lookback_days"], 5)
+        store.mark_backtest_runs_applied([run_id])
+        self.assertEqual(store.load_backtest_runs()[0]["status"], "已应用")
+
+    def test_batch_backtest_confirmation_keeps_only_best_candidate_per_profile(self):
+        config = load_config()
+        store = SQLiteMarketDataStore()
+        store.record_backtest_run(
+            "momentum_grid", {"lookback_days": 5}, {"total_return": "0.05", "max_drawdown": "0.02"}, "待人工确认", "default"
+        )
+        store.record_backtest_run(
+            "momentum_grid", {"lookback_days": 10}, {"total_return": "0.12", "max_drawdown": "0.02"}, "待人工确认", "default"
+        )
+        runs = store.load_backtest_runs(limit=None)
+        payload = confirm_backtest_runs(config, store, [item["id"] for item in runs])
+        statuses = {item["parameters"]["lookback_days"]: item["status"] for item in payload["backtest_runs"]}
+
+        self.assertEqual(payload["queued"], 1)
+        self.assertEqual(payload["rejected"], 1)
+        self.assertEqual(statuses[10], "待下一轮生效")
+        self.assertEqual(statuses[5], "已拒绝")
+
+    def test_configured_watchlist_items_are_persisted_and_can_change_trading_permission(self):
+        config = replace(
+            load_config(),
+            universe=[InstrumentConfig("588170.SH", "etf", "科创100ETF基金", trading_enabled=True)],
+        )
+        store = SQLiteMarketDataStore()
+
+        overview = build_dashboard_overview_payload(config, store)
+        self.assertEqual(store.load_watchlist_items()[0]["symbol"], "588170.SH")
+        self.assertTrue(overview["watchlist"][0]["trading_enabled"])
+
+        set_dashboard_watchlist_trading(config, store, "588170.SH", False)
+        updated = build_dashboard_overview_payload(config, store)
+        self.assertFalse(updated["watchlist"][0]["trading_enabled"])
 
 
 if __name__ == "__main__":

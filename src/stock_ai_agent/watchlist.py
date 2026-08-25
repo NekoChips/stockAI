@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 
 from .config import AppConfig, InstrumentConfig
@@ -16,9 +16,25 @@ def _catalog_item(store: Any, symbol: str) -> dict[str, str] | None:
 
 def effective_watchlist(config: AppConfig, store: Any) -> list[InstrumentConfig]:
     """Combine configured instruments with user-managed instruments persisted by the store."""
+    if hasattr(store, "ensure_watchlist_defaults"):
+        store.ensure_watchlist_defaults(config.universe)
     items = list(config.universe)
     removed = store.load_removed_watchlist_symbols() if hasattr(store, "load_removed_watchlist_symbols") else set()
-    items = [item for item in items if item.symbol not in removed]
+    stored_rows = {
+        str(row["symbol"]): row
+        for row in (store.load_watchlist_items() if hasattr(store, "load_watchlist_items") else [])
+    }
+    items = [
+        replace(
+            item,
+            name=str(stored_rows.get(item.symbol, {}).get("name") or item.name),
+            asset_type=str(stored_rows.get(item.symbol, {}).get("asset_type") or item.asset_type),
+            lifecycle_status=str(stored_rows.get(item.symbol, {}).get("lifecycle_status") or item.lifecycle_status),
+            trading_enabled=bool(stored_rows.get(item.symbol, {}).get("trading_enabled", item.trading_enabled)),
+        )
+        for item in items
+        if item.symbol not in removed
+    ]
     seen = {item.symbol for item in items}
     if not hasattr(store, "load_watchlist_items"):
         return items
@@ -97,8 +113,6 @@ def remove_watchlist_item(config: AppConfig, store: Any, symbol: str) -> str:
 
 def set_watchlist_trading_enabled(config: AppConfig, store: Any, symbol: str, enabled: bool) -> str:
     normalized = validate_hs_symbol(symbol)
-    if normalized in {item.symbol for item in config.universe}:
-        raise ValueError("配置文件中的标的不能在页面直接切换交易权限，请通过配置草稿确认。")
     if not hasattr(store, "set_watchlist_trading_enabled"):
         raise ValueError("当前存储适配器不支持交易权限配置。")
     store.set_watchlist_trading_enabled(normalized, bool(enabled))
