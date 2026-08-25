@@ -9,6 +9,7 @@ from threading import Lock
 from typing import Iterator, List
 
 from ..config import MySQLConnectionConfig
+from ..journal import normalize_daily_report
 from ..models import Bar, Decision, Direction, Fill, OrderStatus, PaperOrder, Portfolio, Position, Quote, StrategySignal
 from ..strategy_catalog import strategy_definitions
 from ..strategy_runtime import profile_from_config
@@ -105,7 +106,8 @@ class MySQLMarketDataStore:
                 reasons TEXT NOT NULL, signal_strategy_id VARCHAR(128), signal_score DECIMAL(12,8),
                 signal_confidence DECIMAL(12,8), signal_target_weight DECIMAL(12,8), signal_evidence TEXT,
                 signal_objections TEXT, signal_explanation TEXT, signal_version VARCHAR(64),
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_decisions_trade_date (trade_date)
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_decisions_trade_date (trade_date),
+                UNIQUE KEY uq_decisions_trade_date_symbol (trade_date, symbol)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS market_quotes (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date DATE NOT NULL,
@@ -163,8 +165,11 @@ class MySQLMarketDataStore:
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS backtest_runs (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY, strategy_id VARCHAR(128) NOT NULL, parameters TEXT NOT NULL,
-                metrics TEXT NOT NULL, status VARCHAR(32) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                id BIGINT AUTO_INCREMENT PRIMARY KEY, strategy_id VARCHAR(128) NOT NULL, strategy_profile_id VARCHAR(128) NOT NULL DEFAULT 'default',
+                parameters TEXT NOT NULL, metrics TEXT NOT NULL, status VARCHAR(32) NOT NULL,
+                confirmed_at DATETIME(6) NULL, applied_at DATETIME(6) NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_backtest_status (status, created_at), INDEX idx_backtest_profile (strategy_profile_id, status)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS daily_reports (
                 report_date DATE PRIMARY KEY, status VARCHAR(32) NOT NULL, summary TEXT NOT NULL,
@@ -266,6 +271,7 @@ class MySQLMarketDataStore:
                 self._migrate_fills(cursor)
                 self._migrate_watchlist(cursor)
                 self._migrate_strategy_profiles(cursor)
+                self._migrate_backtest_runs(cursor)
 
     @staticmethod
     def _migrate_market_quotes(cursor) -> None:
@@ -353,6 +359,29 @@ class MySQLMarketDataStore:
             cursor.execute("ALTER TABLE strategy_profiles ADD COLUMN confirmed_at DATETIME(6) NULL")
         if "effective_monitor_round" not in columns:
             cursor.execute("ALTER TABLE strategy_profiles ADD COLUMN effective_monitor_round VARCHAR(64) NULL")
+
+    @staticmethod
+    def _migrate_backtest_runs(cursor) -> None:
+        try:
+            cursor.execute("SHOW COLUMNS FROM backtest_runs")
+            columns = {row[0] for row in cursor.fetchall()}
+        except Exception:
+            return
+        if "strategy_profile_id" not in columns:
+            cursor.execute("ALTER TABLE backtest_runs ADD COLUMN strategy_profile_id VARCHAR(128) NOT NULL DEFAULT 'default' AFTER strategy_id")
+        if "confirmed_at" not in columns:
+            cursor.execute("ALTER TABLE backtest_runs ADD COLUMN confirmed_at DATETIME(6) NULL AFTER status")
+        if "applied_at" not in columns:
+            cursor.execute("ALTER TABLE backtest_runs ADD COLUMN applied_at DATETIME(6) NULL AFTER confirmed_at")
+        try:
+            cursor.execute("SHOW INDEX FROM backtest_runs")
+            indexes = {row[2] for row in cursor.fetchall()}
+        except Exception:
+            return
+        if "idx_backtest_status" not in indexes:
+            cursor.execute("CREATE INDEX idx_backtest_status ON backtest_runs (status, created_at)")
+        if "idx_backtest_profile" not in indexes:
+            cursor.execute("CREATE INDEX idx_backtest_profile ON backtest_runs (strategy_profile_id, status)")
 
     def save_bars(self, bars: List[Bar], interval: str = "daily", source: str = "unknown") -> int:
         if not bars:
@@ -556,6 +585,21 @@ class MySQLMarketDataStore:
     def load_watchlist_items(self) -> list[dict[str, str]]:
         self.initialize()
         return [{"symbol": row[0], "name": row[1], "asset_type": row[2], "lifecycle_status": row[3], "trading_enabled": row[4]} for row in self._fetchall("SELECT symbol, name, asset_type, lifecycle_status, trading_enabled FROM watchlist_items ORDER BY created_at ASC, symbol ASC")]
+
+    def ensure_watchlist_defaults(self, instruments) -> None:
+        self.initialize()
+        if not instruments:
+            return
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                for item in instruments:
+                    cursor.execute("SELECT 1 FROM watchlist_exclusions WHERE symbol=%s", (item.symbol,))
+                    if cursor.fetchone():
+                        continue
+                    cursor.execute(
+                        "INSERT IGNORE INTO watchlist_items (symbol, name, asset_type, lifecycle_status, trading_enabled) VALUES (%s, %s, %s, %s, %s)",
+                        (item.symbol, item.name or item.symbol, item.asset_type, item.lifecycle_status, int(bool(item.trading_enabled))),
+                    )
 
     def add_watchlist_item(self, symbol: str, name: str, asset_type: str) -> None:
         self.initialize()
@@ -870,17 +914,17 @@ class MySQLMarketDataStore:
         now = datetime.now(observed.tzinfo) if observed.tzinfo else datetime.now()
         return max(0.0, (now - observed).total_seconds())
 
-    def record_backtest_run(self, strategy_id: str, parameters: dict, metrics: dict, status: str) -> None:
+    def record_backtest_run(self, strategy_id: str, parameters: dict, metrics: dict, status: str, strategy_profile_id: str = "default") -> None:
         self.initialize()
-        self._execute("INSERT INTO backtest_runs (strategy_id, parameters, metrics, status) VALUES (%s, %s, %s, %s)", (strategy_id, _dumps_obj(parameters), _dumps_obj(metrics), status))
+        self._execute("INSERT INTO backtest_runs (strategy_id, strategy_profile_id, parameters, metrics, status) VALUES (%s, %s, %s, %s, %s)", (strategy_id, strategy_profile_id, _dumps_obj(parameters), _dumps_obj(metrics), status))
 
     def load_backtest_runs(self, limit: int | None = 20) -> list[dict]:
         self.initialize()
-        sql, params = "SELECT id, strategy_id, parameters, metrics, status, created_at FROM backtest_runs ORDER BY id DESC", ()
+        sql, params = "SELECT id, strategy_id, strategy_profile_id, parameters, metrics, status, confirmed_at, applied_at, created_at FROM backtest_runs ORDER BY id DESC", ()
         if limit is not None:
             sql, params = sql + " LIMIT %s", (limit,)
         rows = self._fetchall(sql, params)
-        return [{"id": int(row[0]), "strategy_id": row[1], "parameters": json.loads(row[2]), "metrics": json.loads(row[3]), "status": row[4], "created_at": row[5].isoformat() if hasattr(row[5], "isoformat") else row[5]} for row in rows]
+        return [{"id": int(row[0]), "strategy_id": row[1], "strategy_profile_id": row[2], "parameters": json.loads(row[3]), "metrics": json.loads(row[4]), "status": row[5], "confirmed_at": row[6].isoformat() if hasattr(row[6], "isoformat") else row[6], "applied_at": row[7].isoformat() if hasattr(row[7], "isoformat") else row[7], "created_at": row[8].isoformat() if hasattr(row[8], "isoformat") else row[8]} for row in rows]
 
     def update_backtest_run_status(self, run_ids: list[int], status: str) -> int:
         self.initialize()
@@ -888,10 +932,22 @@ class MySQLMarketDataStore:
         if not ids:
             return 0
         placeholders = ",".join(["%s"] * len(ids))
-        return self._execute(f"UPDATE backtest_runs SET status=%s WHERE id IN ({placeholders})", (status, *ids))
+        return self._execute(f"UPDATE backtest_runs SET status=%s, confirmed_at=CURRENT_TIMESTAMP(6) WHERE id IN ({placeholders})", (status, *ids))
+
+    def mark_backtest_runs_applied(self, run_ids: list[int]) -> int:
+        self.initialize()
+        ids = [int(item) for item in run_ids]
+        if not ids:
+            return 0
+        placeholders = ",".join(["%s"] * len(ids))
+        return self._execute(
+            f"UPDATE backtest_runs SET status=%s, applied_at=CURRENT_TIMESTAMP(6) WHERE id IN ({placeholders})",
+            ("已应用", *ids),
+        )
 
     def save_daily_report(self, report: dict) -> None:
         self.initialize()
+        report = normalize_daily_report(report)
         account = report.get("account") or {}
         self._execute(
             """INSERT INTO daily_reports (report_date, status, summary, total_asset, daily_pnl, daily_return, report_data)
@@ -939,7 +995,7 @@ class MySQLMarketDataStore:
         self.initialize()
         key = report_date.isoformat() if isinstance(report_date, date) else str(report_date)
         row = self._fetchone("SELECT report_data FROM daily_reports WHERE report_date=%s", (key,))
-        return json.loads(row[0]) if row else None
+        return normalize_daily_report(json.loads(row[0])) if row else None
 
     def load_trading_calendar(self, year: int, market: str = "CN") -> dict[date, bool] | None:
         self.initialize()
@@ -1084,6 +1140,34 @@ class MySQLMarketDataStore:
         )
         self._execute("INSERT INTO strategy_change_log (profile_id, action, operator_name, before_data, after_data) VALUES (%s, %s, %s, %s, %s)", (str(profile_id), "confirm", operator, _dumps_obj(before), _dumps_obj(profile)))
         return profile
+
+    def apply_pending_strategy_profiles(self, operator: str = "monitor") -> list[dict]:
+        self.initialize()
+        rows = self._fetchall("SELECT profile_id, profile_data, draft_data, draft_revision FROM strategy_profiles WHERE draft_data IS NOT NULL")
+        applied = []
+        for profile_id, active_data, draft_data, draft_revision in rows:
+            draft = json.loads(draft_data)
+            if not draft.get("pending_activation"):
+                continue
+            before = json.loads(active_data)
+            draft.update({
+                "status": "active",
+                "pending_activation": False,
+                "confirmed_by": operator,
+                "confirmed_at": datetime.now().isoformat(),
+                "effective_monitor_round": "current",
+                "revision": int(draft_revision or draft.get("revision") or 1),
+            })
+            self._execute(
+                "UPDATE strategy_profiles SET status=%s, revision=%s, profile_data=%s, draft_data=NULL, draft_revision=NULL, confirmed_by=%s, confirmed_at=CURRENT_TIMESTAMP(6), effective_monitor_round=%s, updated_at=CURRENT_TIMESTAMP WHERE profile_id=%s",
+                ("active", draft["revision"], _dumps_obj(draft), operator, "current", profile_id),
+            )
+            self._execute(
+                "INSERT INTO strategy_change_log (profile_id, action, operator_name, before_data, after_data) VALUES (%s, %s, %s, %s, %s)",
+                (profile_id, "apply_backtest", operator, _dumps_obj(before), _dumps_obj(draft)),
+            )
+            applied.append({"profile_id": profile_id, "source_backtest_id": draft.get("source_backtest_id")})
+        return applied
 
     def discard_strategy_draft(self, profile_id: str, operator: str = "web") -> None:
         self.initialize()
@@ -1351,7 +1435,7 @@ def _dumps_obj(value: dict) -> str:
 
 def _profile_diff(active: dict, draft: dict) -> list[dict]:
     """Compact draft comparison consumed by the strategy-center confirmation UI."""
-    ignored = {"status", "revision", "updated_at", "confirmed_at", "confirmed_by", "effective_monitor_round"}
+    ignored = {"status", "revision", "updated_at", "confirmed_at", "confirmed_by", "effective_monitor_round", "pending_activation", "pending_confirmation", "source_backtest_id", "source_backtest_parameters"}
     return [
         {"field": key, "before": active.get(key), "after": draft.get(key)}
         for key in sorted((set(active) | set(draft)) - ignored)

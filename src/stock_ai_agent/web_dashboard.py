@@ -119,7 +119,7 @@ def build_dashboard_overview_payload(
             "profit_leaderboard": build_profit_leaderboard(portfolio, all_fills, names, as_of=as_of),
             "watchlist": watchlist_rows,
             "market_quotes": latest_quotes,
-            "pending_backtest_count": sum(item.get("status") != "已确认" for item in backtest_runs),
+            "pending_backtest_count": sum(item.get("status") not in {"已确认", "已应用", "已拒绝"} for item in backtest_runs),
             "risk_config": risk_payload,
         }
     )

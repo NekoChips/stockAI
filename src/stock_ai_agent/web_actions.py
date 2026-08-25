@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 from .config import AppConfig
 from .universe import infer_asset_type, validate_hs_symbol
@@ -15,14 +18,111 @@ from .strategy_runtime import LEGACY_STRATEGY_ID_ALIASES
 
 
 def confirm_backtest_runs(config: AppConfig, store, run_ids: list[int]) -> dict[str, Any]:
-    updated = store.update_backtest_run_status(run_ids, "已确认") if hasattr(store, "update_backtest_run_status") else 0
+    requested = {int(item) for item in run_ids}
+    runs = store.load_backtest_runs(limit=None) if hasattr(store, "load_backtest_runs") else []
+    selected = [item for item in runs if int(item.get("id", -1)) in requested]
+    missing = requested - {int(item.get("id", -1)) for item in selected}
+    if missing:
+        raise ValueError("部分回测记录不存在或已被清理。")
+    actionable = [item for item in selected if item.get("strategy_id") != "learning_review" and item.get("status") not in {"已应用", "已确认", "待下一轮生效"}]
+    candidates_by_profile: dict[str, list[dict[str, Any]]] = {}
+    for run in actionable:
+        candidates_by_profile.setdefault(str(run.get("strategy_profile_id") or "default"), []).append(run)
+    rejected_ids: list[int] = []
+    selected_candidates: list[dict[str, Any]] = []
+    for candidates in candidates_by_profile.values():
+        winner = max(candidates, key=_backtest_rank)
+        selected_candidates.append(winner)
+        rejected_ids.extend(int(item["id"]) for item in candidates if item is not winner)
+    queued_ids: list[int] = []
+    reviewed_ids: list[int] = []
+    drafts: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    center = store.load_strategy_center(config) if selected_candidates else {"profiles": []}
+    profiles = {str(item.get("profile_id")): item for item in center.get("profiles", [])}
+    for run in selected_candidates:
+        run_id = int(run["id"])
+        profile_id = str(run.get("strategy_profile_id") or "default")
+        profile = profiles.get(profile_id)
+        if not profile:
+            raise ValueError(f"回测 {run_id} 关联的策略组合 {profile_id} 不存在。")
+        if profile.get("pending_activation"):
+            raise ValueError(f"策略组合 {profile_id} 已有待下一轮生效的变更，请先等待 monitor 应用。")
+        drafts.append((profile, run))
+    for profile, run in drafts:
+        save_dashboard_strategy_profile(config, store, _backtest_profile_draft(profile, run))
+        queued_ids.append(int(run["id"]))
+    reviewed_ids.extend(
+        int(item["id"])
+        for item in selected
+        if item.get("strategy_id") == "learning_review"
+        and item.get("status") not in {"已应用", "已确认", "待下一轮生效"}
+    )
+    updated = 0
+    if queued_ids and hasattr(store, "update_backtest_run_status"):
+        updated += store.update_backtest_run_status(queued_ids, "待下一轮生效")
+    if reviewed_ids and hasattr(store, "update_backtest_run_status"):
+        updated += store.update_backtest_run_status(reviewed_ids, "已确认")
+    if rejected_ids and hasattr(store, "update_backtest_run_status"):
+        updated += store.update_backtest_run_status(rejected_ids, "已拒绝")
     _DASHBOARD_CACHE.invalidate_store(id(store))
     return _to_jsonable(
         {
             "updated": updated,
+            "queued": len(queued_ids),
+            "reviewed": len(reviewed_ids),
+            "rejected": len(rejected_ids),
             "backtest_runs": store.load_backtest_runs() if hasattr(store, "load_backtest_runs") else [],
         }
     )
+
+
+def _backtest_rank(run: dict[str, Any]) -> tuple[Decimal, Decimal]:
+    metrics = dict(run.get("metrics") or {})
+    total_return = _backtest_metric(metrics.get("total_return"), Decimal("-999"))
+    max_drawdown = _backtest_metric(metrics.get("max_drawdown"), Decimal("999"))
+    win_rate = _backtest_metric(metrics.get("win_rate"), Decimal("0"))
+    return total_return - max_drawdown, win_rate
+
+
+def _backtest_metric(value: Any, fallback: Decimal) -> Decimal:
+    try:
+        return Decimal(str(value)) if value is not None else fallback
+    except (ArithmeticError, TypeError, ValueError):
+        return fallback
+
+
+def _backtest_profile_draft(profile: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
+    """Translate a confirmed optimizer candidate into a monitor-consumable draft."""
+    draft = deepcopy(profile)
+    strategy_id = str(run.get("strategy_id") or "")
+    parameters = dict(run.get("parameters") or {})
+    enabled = list(draft.get("enabled") or [])
+    weights = {str(key): str(value) for key, value in dict(draft.get("weights") or {}).items()}
+    quant = dict(draft.get("quant") or {})
+    if strategy_id == "momentum_grid":
+        if "time_series_momentum" not in enabled:
+            enabled.append("time_series_momentum")
+        weights.setdefault("time_series_momentum", "1")
+        if "lookback_days" in parameters:
+            quant["lookback_days"] = int(parameters["lookback_days"])
+        if "threshold" in parameters:
+            quant["momentum_threshold"] = str(parameters["threshold"])
+        if "target_weight" in parameters:
+            quant["momentum_target_weight"] = str(parameters["target_weight"])
+    else:
+        raise ValueError(f"暂不支持将 {strategy_id} 回测候选应用到策略组合。")
+    draft.update({
+        "profile_id": str(profile["profile_id"]),
+        "enabled": enabled,
+        "weights": weights,
+        "quant": quant,
+        "pending_activation": True,
+        "pending_confirmation": False,
+        "effective_monitor_round": "next",
+        "source_backtest_id": int(run["id"]),
+        "source_backtest_parameters": parameters,
+    })
+    return draft
 
 
 def run_dashboard_backtest(config: AppConfig, store) -> dict[str, Any]:
@@ -110,9 +210,9 @@ def save_dashboard_strategy_profile(config: AppConfig, store, payload: dict[str,
     if not hasattr(store, "save_strategy_profile"):
         raise ValueError("当前存储适配器不支持策略持久化。")
     profile = dict(payload)
-    profile_id = str(profile.get("profile_id") or profile.get("scope_value") or "").strip()
+    profile_id = str(profile.get("profile_id") or "").strip()
     if not profile_id:
-        raise ValueError("策略组合必须提供 profile_id。")
+        profile_id = f"profile_{uuid4().hex[:12]}"
     enabled = [LEGACY_STRATEGY_ID_ALIASES.get(str(item), str(item)) for item in profile.get("enabled", []) if str(item)]
     weights = {LEGACY_STRATEGY_ID_ALIASES.get(str(key), str(key)): str(value) for key, value in dict(profile.get("weights") or {}).items()}
     for value in weights.values():
@@ -147,7 +247,9 @@ def save_dashboard_strategy_profile(config: AppConfig, store, payload: dict[str,
     store.ensure_strategy_defaults(config) if hasattr(store, "ensure_strategy_defaults") else None
     store.save_strategy_profile(profile)
     _DASHBOARD_CACHE.invalidate_store(id(store))
-    return build_dashboard_strategies_payload(config, store)
+    result = build_dashboard_strategies_payload(config, store)
+    result["saved_profile_id"] = profile_id
+    return result
 
 
 def confirm_dashboard_strategy_profile(config: AppConfig, store, profile_id: str) -> dict[str, Any]:
