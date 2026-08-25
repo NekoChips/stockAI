@@ -15,9 +15,9 @@ export function fetchPerformance(query: PerformanceQuery, signal?: AbortSignal) 
     performance_start: query.performance_start,
     performance_end: query.performance_end,
   }).toString();
-  return apiGet<PerformancePayload & OverviewPayload>(`/api/dashboard/performance?${qs}`, signal);
+  return apiGet<PerformancePayload>(`/api/dashboard/performance?${qs}`, signal);
 }
 
 export function fetchCalendar(signal?: AbortSignal) {
-  return apiGet<CalendarPayload & OverviewPayload>('/api/dashboard/calendar', signal);
+  return apiGet<CalendarPayload>('/api/dashboard/calendar', signal);
 }
