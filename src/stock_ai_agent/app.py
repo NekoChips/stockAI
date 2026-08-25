@@ -232,6 +232,7 @@ def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> o
                 candidate.parameters,
                 _metrics_dict(candidate.metrics),
                 candidate.status,
+                "default",
             )
         proposals = propose_parameter_changes(result.best.metrics.strategy_contributions, result.best.metrics)
         store.record_backtest_run(
@@ -243,9 +244,10 @@ def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> o
                     {"strategy_id": item.strategy_id, "suggestion": item.suggestion, "evidence": item.evidence, "status": item.status}
                     for item in proposals
                 ],
-            },
-            "待人工确认",
-        )
+                },
+                "待人工确认",
+                "default",
+            )
     return result
 
 

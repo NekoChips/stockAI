@@ -41,17 +41,26 @@ def _return(history: List[Decimal], lookback: int) -> Decimal | None:
 class TimeSeriesMomentumStrategy:
     strategy_id = "time_series_momentum"
 
-    def __init__(self, lookback_days: int = 20) -> None:
+    def __init__(
+        self,
+        lookback_days: int = 20,
+        buy_threshold: Decimal = Decimal("0.03"),
+        reduce_threshold: Decimal = Decimal("-0.02"),
+        target_weight: Decimal = Decimal("0.40"),
+    ) -> None:
         self.lookback_days = lookback_days
+        self.buy_threshold = buy_threshold
+        self.reduce_threshold = reduce_threshold
+        self.target_weight = target_weight
 
     def evaluate(self, symbol: str, features: FeatureSet, context: QuantContext) -> StrategySignal:
         history = context.histories.get(symbol, [])
         value = _return(history, self.lookback_days)
         if value is None:
             return _watch(self.strategy_id, symbol, "时间序列动量历史数据不足。")
-        if value > Decimal("0.03") and features.values.get("atr_ratio", Decimal("1")) <= Decimal("0.04"):
-            return _signal(self.strategy_id, symbol, Direction.BUY, Decimal("2"), Decimal("0.40"), [f"{self.lookback_days} 日收益为 {value:.2%}，自身动量为正。"])
-        if value < Decimal("-0.02"):
+        if value > self.buy_threshold and features.values.get("atr_ratio", Decimal("1")) <= Decimal("0.04"):
+            return _signal(self.strategy_id, symbol, Direction.BUY, Decimal("2"), self.target_weight, [f"{self.lookback_days} 日收益为 {value:.2%}，高于动量阈值 {self.buy_threshold:.2%}。"])
+        if value < self.reduce_threshold:
             return _signal(self.strategy_id, symbol, Direction.REDUCE, Decimal("-2"), Decimal("0"), [], [f"{self.lookback_days} 日收益为 {value:.2%}，自身动量转弱。"])
         return _signal(self.strategy_id, symbol, Direction.HOLD, Decimal("0"), context.current_weight(symbol), [f"{self.lookback_days} 日动量不极端，维持观察。"])
 

@@ -11,6 +11,7 @@ from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
+from ..journal import normalize_daily_report
 from ..models import Bar, Decision, Direction, Fill, OrderStatus, PaperOrder, Portfolio, Position, Quote
 from ..strategy_catalog import strategy_definitions
 from ..strategy_runtime import profile_from_config
@@ -139,6 +140,18 @@ class MockMarketDataStore:
 
     def load_watchlist_items(self) -> list[dict[str, str]]:
         return list(self._watchlist.values())
+
+    def ensure_watchlist_defaults(self, instruments) -> None:
+        for item in instruments:
+            if item.symbol in self._excluded or item.symbol in self._watchlist:
+                continue
+            self._watchlist[item.symbol] = {
+                "symbol": item.symbol,
+                "name": item.name,
+                "asset_type": item.asset_type,
+                "lifecycle_status": item.lifecycle_status,
+                "trading_enabled": int(bool(item.trading_enabled)),
+            }
 
     def add_watchlist_item(self, symbol: str, name: str, asset_type: str) -> None:
         self._excluded.discard(symbol)
@@ -319,8 +332,8 @@ class MockMarketDataStore:
     def load_portfolio_snapshots(self) -> list[tuple[date, Decimal]]:
         return sorted(self._snapshots.items())
 
-    def record_backtest_run(self, strategy_id: str, parameters: dict, metrics: dict, status: str) -> None:
-        self._backtests.append({"id": len(self._backtests) + 1, "strategy_id": strategy_id, "parameters": deepcopy(parameters), "metrics": deepcopy(metrics), "status": status, "created_at": datetime.now().isoformat()})
+    def record_backtest_run(self, strategy_id: str, parameters: dict, metrics: dict, status: str, strategy_profile_id: str = "default") -> None:
+        self._backtests.append({"id": len(self._backtests) + 1, "strategy_id": strategy_id, "strategy_profile_id": strategy_profile_id, "parameters": deepcopy(parameters), "metrics": deepcopy(metrics), "status": status, "created_at": datetime.now().isoformat()})
 
     def load_backtest_runs(self, limit: int | None = 20) -> list[dict]:
         rows = list(reversed(self._backtests))
@@ -328,13 +341,25 @@ class MockMarketDataStore:
 
     def update_backtest_run_status(self, run_ids: list[int], status: str) -> int:
         ids = set(run_ids)
+        confirmed_at = datetime.now().isoformat()
         for item in self._backtests:
             if item["id"] in ids:
                 item["status"] = status
+                item["confirmed_at"] = confirmed_at
         return len(ids & {item["id"] for item in self._backtests})
 
+    def mark_backtest_runs_applied(self, run_ids: list[int]) -> int:
+        ids = set(run_ids)
+        count = 0
+        for item in self._backtests:
+            if item["id"] in ids:
+                item["status"] = "已应用"
+                item["applied_at"] = datetime.now().isoformat()
+                count += 1
+        return count
+
     def save_daily_report(self, report: dict) -> None:
-        self._reports[str(report["report_date"])] = deepcopy(report)
+        self._reports[str(report["report_date"])] = deepcopy(normalize_daily_report(report))
 
     def load_daily_reports(self, limit: int = 60, offset: int = 0) -> list[dict]:
         rows = sorted(self._reports.values(), key=lambda item: item["report_date"], reverse=True)[offset:offset + limit]
@@ -350,7 +375,7 @@ class MockMarketDataStore:
 
     def load_daily_report(self, report_date: date | str) -> dict | None:
         value = self._reports.get(report_date.isoformat() if isinstance(report_date, date) else str(report_date))
-        return deepcopy(value) if value else None
+        return deepcopy(normalize_daily_report(value)) if value else None
 
     def load_trading_calendar(self, year: int, market: str = "CN") -> dict[date, bool] | None:
         rows = self._trading_calendar.get((market.upper(), int(year)))
@@ -442,6 +467,32 @@ class MockMarketDataStore:
         self._strategy_changes.append({"profile_id": str(profile_id), "action": "confirm", "operator": operator, "before": previous, "after": deepcopy(profile), "created_at": datetime.now().isoformat()})
         return deepcopy(profile)
 
+    def apply_pending_strategy_profiles(self, operator: str = "monitor") -> list[dict]:
+        applied = []
+        for profile_id, draft in list(self._strategy_drafts.items()):
+            if not draft.get("pending_activation"):
+                continue
+            previous = deepcopy(self._strategy_profiles.get(profile_id))
+            profile = self._strategy_drafts.pop(profile_id)
+            profile.update({
+                "status": "active",
+                "pending_activation": False,
+                "confirmed_by": operator,
+                "confirmed_at": datetime.now().isoformat(),
+                "effective_monitor_round": "current",
+            })
+            self._strategy_profiles[profile_id] = profile
+            self._strategy_changes.append({
+                "profile_id": profile_id,
+                "action": "apply_backtest",
+                "operator": operator,
+                "before": previous,
+                "after": deepcopy(profile),
+                "created_at": datetime.now().isoformat(),
+            })
+            applied.append({"profile_id": profile_id, "source_backtest_id": profile.get("source_backtest_id")})
+        return applied
+
     def discard_strategy_draft(self, profile_id: str, operator: str = "web") -> None:
         key = str(profile_id)
         draft = self._strategy_drafts.pop(key, None)
@@ -480,7 +531,7 @@ class MockMarketDataStore:
 
 def _profile_diff(active: dict, draft: dict) -> list[dict]:
     """Small, presentation-ready diff for the confirmation UI; no rollback payload."""
-    ignored = {"status", "revision", "updated_at", "confirmed_at", "confirmed_by", "effective_monitor_round"}
+    ignored = {"status", "revision", "updated_at", "confirmed_at", "confirmed_by", "effective_monitor_round", "pending_activation", "pending_confirmation", "source_backtest_id", "source_backtest_parameters"}
     changes = []
     for key in sorted((set(active) | set(draft)) - ignored):
         before, after = active.get(key), draft.get(key)

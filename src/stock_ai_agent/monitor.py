@@ -129,6 +129,7 @@ class RealTimePaperTradingMonitor:
     def run_iteration(self, now: datetime | None = None, ignore_market_hours: bool = False) -> MonitorIterationResult:
         local_now = self._local_now(now)
         trade_date = local_now.date()
+        self._apply_pending_strategy_changes()
         portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
 
         if (
@@ -325,6 +326,15 @@ class RealTimePaperTradingMonitor:
         if warnings:
             message = "".join([message, " 告警：", "；".join(warnings)])
         return MonitorIterationResult(status, message, portfolio, decisions, fills, warnings=warnings)
+
+    def _apply_pending_strategy_changes(self) -> None:
+        """Apply confirmed backtest drafts once, before the next monitor evaluation."""
+        if not hasattr(self.store, "apply_pending_strategy_profiles"):
+            return
+        applied = self.store.apply_pending_strategy_profiles()
+        run_ids = [int(item["source_backtest_id"]) for item in applied if item.get("source_backtest_id")]
+        if run_ids and hasattr(self.store, "mark_backtest_runs_applied"):
+            self.store.mark_backtest_runs_applied(run_ids)
 
     def generate_post_close_report(self, report_date: date | None = None) -> dict:
         report_date = report_date or datetime.now(self.timezone).date()

@@ -161,6 +161,23 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(result.status, "skipped")
         self.assertEqual(result.fills, [])
 
+    def test_monitor_applies_confirmed_backtest_before_next_iteration(self):
+        config = configured_config()
+        store = SQLiteMarketDataStore()
+        store.ensure_strategy_defaults(config)
+        store.record_backtest_run(
+            "momentum_grid", {"lookback_days": 5}, {"total_return": "0.05"}, "待人工确认", "default"
+        )
+        run_id = store.load_backtest_runs()[0]["id"]
+        from stock_ai_agent.web_actions import confirm_backtest_runs
+
+        confirm_backtest_runs(config, store, [run_id])
+        monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
+        result = monitor.run_iteration(datetime(2026, 8, 17, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+        self.assertEqual(result.status, "skipped")
+        self.assertEqual(store.load_backtest_runs()[0]["status"], "已应用")
+
     def test_monitor_prunes_previous_intraday_quotes_once_before_a_new_trading_day(self):
         pre_open = datetime(2026, 8, 17, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
 

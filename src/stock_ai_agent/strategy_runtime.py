@@ -112,7 +112,14 @@ def evaluate_strategy_profile(
     if "technical_composite" in enabled:
         signals.append(TechnicalCompositeStrategy(technical).evaluate(features, strategy_context))
     if "time_series_momentum" in enabled:
-        signals.append(TimeSeriesMomentumStrategy(int(quant.get("lookback_days", 20))).evaluate(symbol, features, quant_context))
+        signals.append(
+            TimeSeriesMomentumStrategy(
+                int(quant.get("lookback_days", 20)),
+                Decimal(str(quant.get("momentum_threshold", "0.03"))),
+                Decimal(str(quant.get("momentum_exit_threshold", "-0.02"))),
+                Decimal(str(quant.get("momentum_target_weight", "0.40"))),
+            ).evaluate(symbol, features, quant_context)
+        )
     if "mean_reversion" in enabled:
         signals.append(MeanReversionStrategy(Decimal(str(quant.get("mean_reversion_z", "-1.2")))).evaluate(symbol, features, quant_context))
     if "relative_strength" in enabled:

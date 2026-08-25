@@ -7,6 +7,50 @@ from typing import Iterable
 from .models import Decision, Fill, Portfolio
 
 
+def _merge_unique(items: list, additions: list) -> list:
+    merged = []
+    for item in [*items, *additions]:
+        if item not in merged:
+            merged.append(item)
+    return merged
+
+
+def deduplicate_decision_rows(rows: Iterable[dict]) -> list[dict]:
+    """Keep one final decision row per symbol while preserving all evidence."""
+    grouped: dict[str, dict] = {}
+    order: list[str] = []
+    for index, row in enumerate(rows):
+        current = dict(row)
+        symbol = str(current.get("symbol") or "")
+        key = symbol or f"__row_{index}"
+        previous = grouped.get(key)
+        if previous is not None:
+            for field in ("risk_reasons", "evidence", "objections"):
+                previous[field] = _merge_unique(
+                    list(previous.get(field) or []),
+                    list(current.get(field) or []),
+                )
+        else:
+            current["risk_reasons"] = list(current.get("risk_reasons") or [])
+            current["evidence"] = list(current.get("evidence") or [])
+            current["objections"] = list(current.get("objections") or [])
+            grouped[key] = current
+            order.append(key)
+            continue
+        current["risk_reasons"] = previous["risk_reasons"]
+        current["evidence"] = previous["evidence"]
+        current["objections"] = previous["objections"]
+        grouped[key] = current
+    return [grouped[key] for key in order]
+
+
+def normalize_daily_report(report: dict) -> dict:
+    """Normalize persisted report snapshots without mutating the stored object."""
+    normalized = dict(report)
+    normalized["decisions"] = deduplicate_decision_rows(report.get("decisions") or [])
+    return normalized
+
+
 def build_daily_report(
     report_date: date,
     portfolio: Portfolio,
@@ -73,7 +117,7 @@ def build_daily_report(
             }
         )
 
-    return {
+    return normalize_daily_report({
         "report_date": report_date.isoformat(),
         "status": status,
         "summary": _build_summary(position_rows, fill_rows, decision_rows),
@@ -90,7 +134,7 @@ def build_daily_report(
         "positions": position_rows,
         "fills": fill_rows,
         "decisions": decision_rows,
-    }
+    })
 
 
 def _build_summary(positions: list[dict], fills: list[dict], decisions: list[dict]) -> str:
