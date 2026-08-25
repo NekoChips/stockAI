@@ -11,6 +11,7 @@ body {
 }
 .gain { color: var(--gain); }
 .loss { color: var(--loss); }
+.watch-row td { background: #fbfdff; }
 .tabular { font-variant-numeric: tabular-nums; font-family: "Fira Code", ui-monospace, monospace; }
 .sr-only {
   position: absolute;

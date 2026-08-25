@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Col, Row, Spin, Typography } from 'antd';
+import { Col, Empty, Row, Spin, Typography } from 'antd';
 import { fetchOverview } from '@/api/dashboard';
 import { AccountStrip } from '@/components/account/AccountStrip';
 import { RecentActivity } from '@/components/activity/RecentActivity';
@@ -26,11 +26,29 @@ export default function DashboardPage() {
     }
   }, [isError, error, setNotice]);
 
-  if (isLoading || !data) {
+  if (isLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
         <Spin size="large" />
       </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <>
+        <Typography.Title level={3} style={{ marginTop: 0 }}>
+          交易看板
+        </Typography.Title>
+        <Empty
+          description={
+            isError
+              ? '无法加载看板数据，请使用顶部提示栏重试。'
+              : '暂无看板数据。'
+          }
+          style={{ padding: '48px 0' }}
+        />
+      </>
     );
   }
 
