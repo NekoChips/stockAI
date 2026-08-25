@@ -1,13 +1,18 @@
 import { useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { Card, Table, Typography } from 'antd';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Button, Card, Popconfirm, Space, Switch, Table, Typography } from 'antd';
+import { DeleteOutlined, PauseOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
+import { removeWatchlistItem, setWatchlistTrading } from '@/api/watchlist';
+import { useUiStore } from '@/stores/uiStore';
 import type { MarketQuote, OverviewPayload, PortfolioPosition, WatchlistItem } from '@/types/dashboard';
 import { fmtMoney, fmtPct, toneClass } from '@/utils/format';
 
 interface PositionsTableProps {
   data: OverviewPayload;
+  onAddInstrument?: () => void;
 }
 
 interface PositionRow {
@@ -25,6 +30,7 @@ interface PositionRow {
   floatingLabel: string;
   status: string;
   isWatch: boolean;
+  tradingEnabled?: boolean;
 }
 
 function quotePrice(quote: MarketQuote | undefined, fallback = '--'): string {
@@ -37,13 +43,47 @@ function quoteChangeNode(quote: MarketQuote | undefined): ReactNode {
   return <span className={toneClass(pct)}>{fmtPct(pct)}</span>;
 }
 
-export function PositionsTable({ data }: PositionsTableProps) {
+export function PositionsTable({ data, onAddInstrument }: PositionsTableProps) {
+  const queryClient = useQueryClient();
+  const announce = useUiStore((s) => s.announce);
+
   const portfolio = data.portfolio ?? {};
   const watchlist = Array.isArray(data.watchlist) ? data.watchlist : [];
   const names = Object.fromEntries(watchlist.map((item) => [item.symbol, item.name]));
   const quotes = data.market_quotes ?? {};
   const asset = Number(portfolio.total_asset ?? 0);
   const market = Number(portfolio.total_market_value ?? 0);
+
+  const patchOverview = (dashboard: OverviewPayload) => {
+    queryClient.setQueryData(['overview'], dashboard);
+  };
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ symbol, enabled }: { symbol: string; enabled: boolean }) =>
+      setWatchlistTrading(symbol, enabled),
+    onSuccess: (payload, { symbol, enabled }) => {
+      patchOverview(payload.dashboard);
+      announce(`${symbol}${enabled ? ' 已启用交易。' : ' 已停用交易。'}`);
+    },
+    onError: (error) => {
+      announce(error instanceof Error && error.message ? error.message : '交易权限更新失败。');
+    },
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (symbol: string) => removeWatchlistItem(symbol),
+    onSuccess: (payload, symbol) => {
+      patchOverview(payload.dashboard);
+      announce(`${symbol} 已移出观察池。`);
+    },
+    onError: (error) => {
+      announce(
+        error instanceof Error && error.message
+          ? error.message
+          : '移除失败：持仓中的标的不能移除。',
+      );
+    },
+  });
 
   const positionRows = useMemo(() => {
     const rows = [...(portfolio.positions ?? [])].sort(
@@ -101,6 +141,7 @@ export function PositionsTable({ data }: PositionsTableProps) {
           floatingLabel: enabled ? '等待信号' : '等待人工启用',
           status: '--',
           isWatch: true,
+          tradingEnabled: enabled,
         };
       });
   }, [watchlist, portfolio.positions, quotes]);
@@ -148,11 +189,36 @@ export function PositionsTable({ data }: PositionsTableProps) {
       title: '操作',
       dataIndex: 'status',
       align: 'right',
-      render: (value, row) =>
+      render: (_, row) =>
         row.isWatch ? (
-          <Typography.Text type="secondary">--</Typography.Text>
+          <Space size={4}>
+            <Switch
+              size="small"
+              checked={row.tradingEnabled}
+              loading={toggleMutation.isPending && toggleMutation.variables?.symbol === row.symbol}
+              checkedChildren={<PlayCircleOutlined />}
+              unCheckedChildren={<PauseOutlined />}
+              aria-label={`${row.tradingEnabled ? '停用' : '启用'} ${row.name} 的交易`}
+              onChange={(enabled) => toggleMutation.mutate({ symbol: row.symbol, enabled })}
+            />
+            <Popconfirm
+              title={`确认将 ${row.symbol} 移出观察池吗？`}
+              okText="确认"
+              cancelText="取消"
+              onConfirm={() => removeMutation.mutate(row.symbol)}
+            >
+              <Button
+                type="text"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                loading={removeMutation.isPending && removeMutation.variables === row.symbol}
+                aria-label={`移除 ${row.name}`}
+              />
+            </Popconfirm>
+          </Space>
         ) : (
-          <Typography.Text type="secondary">{value}</Typography.Text>
+          <Typography.Text type="secondary">{row.status}</Typography.Text>
         ),
     },
   ];
@@ -160,7 +226,16 @@ export function PositionsTable({ data }: PositionsTableProps) {
   return (
     <Card
       title="实时持仓"
-      extra={<Typography.Text type="secondary">{meta}</Typography.Text>}
+      extra={
+        <Space>
+          <Typography.Text type="secondary">{meta}</Typography.Text>
+          {onAddInstrument ? (
+            <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onAddInstrument}>
+              添加标的
+            </Button>
+          ) : null}
+        </Space>
+      }
       styles={{ body: { padding: 0 } }}
     >
       <div style={{ padding: '0 20px 14px' }}>
