@@ -1,0 +1,14 @@
+:root {
+  --gain: #d92d20;
+  --loss: #07875b;
+  --ink: #172033;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+  color: var(--ink);
+  font-family: "Fira Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+.gain { color: var(--gain); }
+.loss { color: var(--loss); }
+.tabular { font-variant-numeric: tabular-nums; font-family: "Fira Code", ui-monospace, monospace; }
