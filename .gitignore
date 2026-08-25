@@ -44,5 +44,10 @@ config/*.secret.yaml
 docker/.env.release
 dist/
 
+src/stock_ai_agent/spa/**
+!src/stock_ai_agent/spa/.gitkeep
+frontend/node_modules/
+frontend/dist/
+
 .worktrees/
 .superpowers/
