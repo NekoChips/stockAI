@@ -21,7 +21,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-stock_ai_agent = ["dashboard.html"]
+stock_ai_agent = ["dashboard.html", "spa/**/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

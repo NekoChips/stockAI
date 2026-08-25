@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "postbuild": "node --input-type=module -e \"import { writeFileSync } from 'node:fs'; writeFileSync('../src/stock_ai_agent/spa/.gitkeep', '')\"",
     "preview": "vite preview"
   },
   "dependencies": {
