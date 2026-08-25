@@ -1,6 +1,8 @@
 import { apiGet } from './client';
 import type { DailyReportPayload, DailyReportsPayload } from '@/types/dashboard';
 
+export const DAILY_REPORT_PAGE_SIZE = 30;
+
 export interface ReportsQuery {
   limit?: number;
   offset?: number;

@@ -330,12 +330,22 @@ export interface DailyReportDecision {
   version?: string;
 }
 
+export interface DailyReportTimelineEvent {
+  event_at?: string;
+  symbol?: string;
+  phase?: string;
+  direction?: string;
+  status?: string;
+  reasons?: string[];
+}
+
 export interface DailyReport extends DailyReportSummary {
   system_notes?: string[];
   account?: DailyReportAccount;
   positions?: DailyReportPosition[];
   fills?: DailyReportFill[];
   decisions?: DailyReportDecision[];
+  decision_timeline?: DailyReportTimelineEvent[];
 }
 
 export interface DailyReportsPayload {
