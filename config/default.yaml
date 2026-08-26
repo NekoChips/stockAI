@@ -28,17 +28,18 @@
     "providers": {
       "alphafeed": {
         "api_key_env": "ALPHAFEED_API_KEY",
-        "min_request_interval_seconds": 7.5,
+        "quote_request_interval_seconds": 6.5,
+        "kline_request_interval_seconds": 6.5,
         "quote_cache_seconds": 3,
         "quote_max_symbols_per_request": 5,
-        "quote_max_requests_per_minute": 8,
+        "quote_max_requests_per_minute": 10,
         "kline_max_symbols_per_request": 1,
         "kline_max_requests_per_minute": 10,
-        "kline_request_interval_seconds": 6,
-        "kline_cache_seconds": 21600,
-        "history_count": 2000,
+        "history_count": 0,
         "circuit_breaker_failure_threshold": 1,
-        "circuit_breaker_cooldown_seconds": 60
+        "network_circuit_breaker_cooldown_seconds": 15,
+        "rate_limit_circuit_breaker_cooldown_seconds": 60,
+        "capability_circuit_breaker_cooldown_seconds": 300
       },
       "akshare": {
         "stock_spot_function": "stock_zh_a_spot_em",
@@ -72,6 +73,7 @@
   },
   "monitor": {
     "poll_seconds": 60,
+    "quote_poll_seconds": 6.5,
     "post_close_report_time": "15:05",
     "respect_market_hours": true,
     "settle_on_start": true

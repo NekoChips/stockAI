@@ -408,6 +408,76 @@ class WebDashboardTests(unittest.TestCase):
         self.assertEqual(statuses[10], "待下一轮生效")
         self.assertEqual(statuses[5], "已拒绝")
 
+    def test_decision_events_payload_merges_decisions_orders_and_fills_chronologically(self):
+        from datetime import datetime, timezone
+
+        from stock_ai_agent.models import Decision, OrderStatus, PaperOrder
+        from stock_ai_agent.web_dashboard import build_dashboard_decision_events_payload
+
+        trade_date = date(2026, 8, 17)
+        store = SQLiteMarketDataStore()
+
+        store.record_decision(
+            Decision("588170.SH", Direction.BUY, Decimal("0.20"), True, ["风控通过"]),
+            trade_date,
+        )
+        store._decision_events[-1]["event_at"] = "2026-08-17T09:30:00+00:00"
+
+        order_time = datetime(2026, 8, 17, 9, 35, tzinfo=timezone.utc)
+        store.save_order(
+            PaperOrder(
+                "588170.SH",
+                Direction.BUY,
+                1000,
+                Decimal("1.22"),
+                status=OrderStatus.SUBMITTED,
+                order_id="ord-1",
+                created_at=order_time,
+                updated_at=order_time,
+            ),
+            trade_date,
+        )
+
+        fill_time = datetime(2026, 8, 17, 9, 40, tzinfo=timezone.utc)
+        store.record_fill(
+            Fill(
+                "588170.SH",
+                Direction.BUY,
+                1000,
+                Decimal("1.22"),
+                Decimal("1"),
+                Decimal("0.01"),
+                fill_time,
+                order_id="ord-1",
+            ),
+            trade_date,
+        )
+
+        payload = build_dashboard_decision_events_payload(store, as_of=trade_date)
+
+        self.assertEqual(set(payload.keys()), {"events", "as_of", "fill_count"})
+        self.assertEqual(payload["as_of"], "2026-08-17")
+        self.assertEqual(payload["fill_count"], 1)
+
+        events = payload["events"]
+        self.assertEqual(len(events), 3)
+        event_times = [item["event_at"] for item in events]
+        self.assertEqual(event_times, sorted(event_times))
+        types = {item["type"] for item in events}
+        self.assertIn("decision", types)
+        self.assertIn("order", types)
+        self.assertIn("fill", types)
+
+        limited = build_dashboard_decision_events_payload(store, as_of=trade_date, limit=1)
+        self.assertEqual(len(limited["events"]), 1)
+        self.assertEqual(limited["events"][0]["type"], "fill")
+
+    def test_decision_events_invalid_date_raises(self):
+        from stock_ai_agent.web_dashboard import _query_date
+
+        with self.assertRaises(ValueError):
+            _query_date({"date": ["not-a-date"]}, "date")
+
     def test_configured_watchlist_items_are_persisted_and_can_change_trading_permission(self):
         config = replace(
             load_config(),

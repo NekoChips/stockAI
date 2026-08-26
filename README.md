@@ -23,7 +23,7 @@ Web 层按职责拆分为数据组装、写操作、健康检查、HTTP 路由�
 
 ## Web UI
 
-Web 看板只提供 React + Ant Design SPA，根路径会跳转到 `/app/`，不再保留 legacy HTML 入口。策略、回测、观察池、风险配置、日报和标的详情均在页面完成；行情同步、收盘日报和自动回测由 monitor 按调度自动执行。本地 SPA 热更新：`cd frontend && npm run dev`（Vite :5173，API 代理至 Python :8765）；生产镜像在构建阶段生成 `/app` 静态资源。
+Web 看板只提供 React + Ant Design SPA，入口为根路径 `/`（旧 `/app` 会 302 到对应根路径）。策略、回测、观察池、风险配置、日报和标的详情均在页面完成；行情同步、收盘日报和自动回测由 monitor 按调度自动执行。本地 SPA 热更新：`cd frontend && npm run dev`（Vite :5173，API 代理至 Python :8765）；生产镜像在构建阶段生成根路径静态资源。
 
 应用的 Python 模块仅保留 `monitor` 和 `web` 两个容器启动模式，`sync-*`、`run-once`、`post-close` 和 `optimize-strategy` 等手工 CLI 业务命令已移除，避免形成第二套操作入口。
 

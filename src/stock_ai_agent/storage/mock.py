@@ -11,7 +11,14 @@ from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-from ..journal import normalize_daily_report
+from ..journal import (
+    decision_position_context,
+    decision_event_state,
+    deduplicate_decision_timeline,
+    make_business_event_key,
+    normalize_daily_report,
+    order_event_state,
+)
 from ..models import Bar, Decision, Direction, Fill, OrderStatus, PaperOrder, Portfolio, Position, Quote
 from ..strategy_catalog import strategy_definitions
 from ..strategy_runtime import profile_from_config
@@ -204,12 +211,12 @@ class MockMarketDataStore:
     def save_portfolio(self, portfolio: Portfolio) -> None:
         self._portfolio = deepcopy(portfolio)
 
-    def record_decision(self, decision: Decision, trade_date: date) -> None:
-        self._decision_events.append({"trade_date": trade_date.isoformat(), "symbol": decision.symbol, "event_at": datetime.now().isoformat(), "phase": "decision", "direction": decision.direction.value, "approved": decision.approved, "target_weight": str(decision.target_weight), "reasons": list(decision.reasons), "strategy_id": decision.source_signal.strategy_id if decision.source_signal else ""})
+    def record_decision(self, decision: Decision, trade_date: date, portfolio: Portfolio | None = None) -> None:
+        updated = False
         for index, (day, previous) in enumerate(self._decisions):
             if day != trade_date or previous.symbol != decision.symbol:
                 continue
-            reasons = list(dict.fromkeys([*previous.reasons, *decision.reasons]))
+            reasons = list(dict.fromkeys([*previous.reasons, *decision.reasons]))[-20:]
             self._decisions[index] = (
                 day,
                 Decision(
@@ -221,8 +228,48 @@ class MockMarketDataStore:
                     decision.source_signal or previous.source_signal,
                 ),
             )
+            updated = True
+            break
+        if not updated:
+            self._decisions.append((trade_date, deepcopy(decision)))
+        previous_event = next(
+            (
+                item
+                for item in reversed(self._decision_events)
+                if item["trade_date"] == trade_date.isoformat()
+                and item["phase"] == "decision"
+                and item["symbol"] == decision.symbol
+            ),
+            None,
+        )
+        previous_state = (
+            str(previous_event.get("direction")),
+            str(previous_event.get("target_weight")),
+            bool(previous_event.get("approved")),
+            str(previous_event.get("strategy_id") or ""),
+        ) if previous_event else None
+        if previous_state == decision_event_state(decision):
             return
-        self._decisions.append((trade_date, deepcopy(decision)))
+        position_quantity, position_weight, position_state = decision_position_context(portfolio, decision.symbol)
+        self._decision_events.append(
+            {
+                "trade_date": trade_date.isoformat(),
+                "symbol": decision.symbol,
+                "event_at": datetime.now().isoformat(),
+                "phase": "decision",
+                "direction": decision.direction.value,
+                "approved": decision.approved,
+                "target_weight": str(decision.target_weight),
+                "position_quantity": position_quantity,
+                "position_weight": str(position_weight),
+                "position_state": position_state,
+                "reasons": list(decision.reasons),
+                "strategy_id": decision.source_signal.strategy_id if decision.source_signal else "",
+                "event_key": make_business_event_key(
+                    "decision", trade_date, decision.symbol, decision_event_state(decision), len(self._decision_events)
+                ),
+            }
+        )
 
     def compact_watch_decisions(self) -> int:
         retained: list[tuple[date, Decision]] = []
@@ -249,7 +296,32 @@ class MockMarketDataStore:
         self._orders[order.order_id] = deepcopy(order)
         happened = order.updated_at or order.created_at
         day = trade_date or happened.date()
-        self._decision_events.append({"trade_date": day.isoformat(), "symbol": order.symbol, "event_at": happened.isoformat(), "phase": "order", "direction": order.direction.value, "status": order.status.value, "order_id": order.order_id, "reasons": [order.reason or order.rejected_reason] if (order.reason or order.rejected_reason) else []})
+        previous_event = next(
+            (item for item in reversed(self._decision_events) if item["phase"] == "order" and item.get("order_id") == order.order_id),
+            None,
+        )
+        previous_state = (
+            str(previous_event.get("direction")),
+            str(previous_event.get("status")),
+            int(previous_event.get("filled_quantity") or 0),
+        ) if previous_event else None
+        if previous_state != order_event_state(order):
+            self._decision_events.append(
+                {
+                    "trade_date": day.isoformat(),
+                    "symbol": order.symbol,
+                    "event_at": happened.isoformat(),
+                    "phase": "order",
+                    "direction": order.direction.value,
+                    "status": order.status.value,
+                    "filled_quantity": order.filled_quantity,
+                    "order_id": order.order_id,
+                    "reasons": [order.reason or order.rejected_reason] if (order.reason or order.rejected_reason) else [],
+                    "event_key": make_business_event_key(
+                        "order", day, order.symbol, order_event_state(order), len(self._decision_events)
+                    ),
+                }
+            )
         return deepcopy(order)
 
     def load_open_orders(self, symbol: str | None = None) -> list[PaperOrder]:
@@ -265,6 +337,39 @@ class MockMarketDataStore:
 
     def load_decision_events(self, trade_date: date, symbol: str | None = None) -> list[dict]:
         return [deepcopy(item) for item in self._decision_events if item["trade_date"] == trade_date.isoformat() and (symbol is None or item["symbol"] == symbol)]
+
+    def compact_decision_events(self, trade_date: date | None = None) -> int:
+        target = trade_date.isoformat() if trade_date else None
+        selected = [item for item in self._decision_events if target is None or item["trade_date"] == target]
+        retained = deduplicate_decision_timeline(selected)
+        retained_keys = {str(item.get("event_key") or "") for item in retained}
+        before = len(selected)
+        if target is None:
+            self._decision_events = retained
+        else:
+            self._decision_events = [
+                item for item in self._decision_events
+                if item["trade_date"] != target or str(item.get("event_key") or "") in retained_keys
+            ]
+        return before - len(retained)
+
+    def purge_decision_events(
+        self,
+        as_of: date | None = None,
+        decision_retention_days: int = 30,
+        order_retention_days: int = 730,
+    ) -> int:
+        reference = as_of or date.today()
+        cutoffs = {
+            "decision": reference - timedelta(days=decision_retention_days),
+            "order": reference - timedelta(days=order_retention_days),
+        }
+        before = len(self._decision_events)
+        self._decision_events = [
+            item for item in self._decision_events
+            if date.fromisoformat(str(item["trade_date"])) >= cutoffs.get(str(item.get("phase")), reference)
+        ]
+        return before - len(self._decision_events)
 
     def save_futures_positions(self, rows: list[dict]) -> int:
         for row in rows:

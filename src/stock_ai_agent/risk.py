@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from decimal import Decimal, ROUND_DOWN
 from typing import Optional
 
@@ -36,9 +37,10 @@ class RiskEngine:
         except UniverseError as exc:
             return self._reject(signal, str(exc))
 
+        position = portfolio.positions.get(signal.symbol)
+        signal = self._normalize_neutral_direction(signal, position)
         if not quote.is_fresh:
             return self._reject(signal, "行情数据已过期，禁止产生新的模拟订单。")
-        position = portfolio.positions.get(signal.symbol)
         if not instrument.trading_enabled and signal.direction in {Direction.BUY, Direction.ADD}:
             return self._reject(signal, "标的未启用交易，禁止买入或加仓。")
         if position and position.quantity > 0:
@@ -145,6 +147,14 @@ class RiskEngine:
         if historical_peak and historical_peak > 0 and portfolio.total_asset() <= historical_peak * (Decimal("1") - self.config.max_drawdown):
             return f"组合历史高点回撤达到 {self.config.max_drawdown:.0%}，触发风控降仓。"
         return None
+
+    @staticmethod
+    def _normalize_neutral_direction(signal: StrategySignal, position) -> StrategySignal:
+        """Make the final no-op direction reflect the actual held/empty state."""
+        if signal.direction not in {Direction.HOLD, Direction.WATCH}:
+            return signal
+        expected = Direction.HOLD if position is not None and position.quantity > 0 else Direction.WATCH
+        return replace(signal, direction=expected) if signal.direction != expected else signal
 
     def _reject(self, signal: StrategySignal, reason: str) -> RiskResult:
         return RiskResult(Decision(signal.symbol, signal.direction, signal.target_weight, False, [reason], signal), None)

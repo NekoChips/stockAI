@@ -10,7 +10,14 @@ from zoneinfo import ZoneInfo
 from stock_ai_agent.config import InstrumentConfig, load_config
 from stock_ai_agent.models import Bar, Decision, Direction, FeatureSet, Quote, StrategySignal
 from stock_ai_agent.storage.mock import MockMarketDataStore
-from stock_ai_agent.monitor import RealTimePaperTradingMonitor, is_post_close_report_time, is_trading_time
+from stock_ai_agent.monitor import (
+    RealTimePaperTradingMonitor,
+    is_daily_kline_window,
+    is_post_close_report_time,
+    is_realtime_collection_time,
+    is_strategy_time,
+    is_trading_time,
+)
 from stock_ai_agent.storage.mock import MockMarketDataStore as SQLiteMarketDataStore
 
 
@@ -79,6 +86,45 @@ def configured_config():
 
 
 class MonitorTests(unittest.TestCase):
+    def test_market_data_windows_separate_snapshots_strategy_and_daily_klines(self):
+        tz = ZoneInfo("Asia/Shanghai")
+
+        self.assertTrue(is_realtime_collection_time(datetime(2026, 8, 17, 9, 15, tzinfo=tz)))
+        self.assertTrue(is_realtime_collection_time(datetime(2026, 8, 17, 13, 0, tzinfo=tz)))
+        self.assertFalse(is_realtime_collection_time(datetime(2026, 8, 17, 12, 0, tzinfo=tz)))
+        self.assertTrue(is_strategy_time(datetime(2026, 8, 17, 9, 30, tzinfo=tz)))
+        self.assertFalse(is_strategy_time(datetime(2026, 8, 17, 9, 15, tzinfo=tz)))
+        self.assertTrue(is_daily_kline_window(datetime(2026, 8, 17, 15, 30, tzinfo=tz)))
+        self.assertTrue(is_daily_kline_window(datetime(2026, 8, 18, 8, 59, tzinfo=tz)))
+        self.assertFalse(is_daily_kline_window(datetime(2026, 8, 18, 9, 0, tzinfo=tz)))
+
+    def test_realtime_quote_collection_excludes_dormant_symbols(self):
+        config = configured_config()
+        store = MockMarketDataStore()
+        store.add_watchlist_item("588170.SH", "测试 ETF", "etf")
+        store.add_watchlist_item("588200.SH", "测试 ETF 2", "etf")
+        store.set_watchlist_trading_enabled("588170.SH", True)
+        store.update_watchlist_lifecycle("588200.SH", "dormant", date(2026, 8, 17))
+        monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
+
+        with patch("stock_ai_agent.monitor.fetch_quotes", return_value={"588170.SH": MockQuoteProvider().get_quote("588170.SH")}) as fetch:
+            monitor.collect_realtime_quotes(datetime(2026, 8, 17, 9, 15, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+        self.assertEqual(fetch.call_args.args[1], ["588170.SH"])
+
+    def test_initialize_trading_data_only_reads_database_during_trading(self):
+        config = configured_config()
+        store = MockMarketDataStore()
+        for item in config.universe:
+            store.save_bars(bars(item.symbol), source="mock")
+        monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
+
+        with patch.object(monitor, "_sync_watchlist_history", side_effect=AssertionError("交易时段不应同步日 K")):
+            ready, warnings = monitor.initialize_trading_data(date(2026, 8, 17))
+
+        self.assertTrue(ready)
+        self.assertEqual(warnings, [])
+
     def test_trading_time_helpers(self):
         tz = ZoneInfo("Asia/Shanghai")
         self.assertTrue(is_trading_time(datetime(2026, 8, 17, 10, 0, tzinfo=tz)))
@@ -97,9 +143,9 @@ class MonitorTests(unittest.TestCase):
         tz = ZoneInfo("Asia/Shanghai")
         monitor = RealTimePaperTradingMonitor(config, MockMarketDataStore(), MockQuoteProvider())
 
-        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 8, 0, tzinfo=tz)), 3900)
+        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 8, 0, tzinfo=tz)), 1800)
         self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 12, 0, tzinfo=tz)), 3600)
-        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 15, 10, tzinfo=tz)), 3 * 60 * 60 + 50 * 60)
+        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 15, 10, tzinfo=tz)), 20 * 60)
 
     def test_non_trading_day_sleep_skips_to_next_trading_day(self):
         config = configured_config()
@@ -280,8 +326,8 @@ class MonitorTests(unittest.TestCase):
 
             counts = [len(store.load_bars(item.symbol)) for item in config.universe]
 
-        self.assertTrue(all(count >= 35 for count in counts))
-        self.assertEqual(self.startup_result.status, "traded")
+        self.assertTrue(all(count == 0 for count in counts))
+        self.assertEqual(self.startup_result.status, "initializing")
 
     def test_initialization_reuses_sufficient_database_history_without_remote_kline_call(self):
         config = configured_config()
@@ -310,28 +356,6 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertEqual(history.calls, [])
 
-    def test_intraday_daily_reference_sync_does_not_refresh_kline_history(self):
-        config = configured_config()
-
-        class InlineThread:
-            def __init__(self, target, args=(), daemon=False):
-                self.target = target
-                self.args = args
-
-            def start(self):
-                self.target(*self.args)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
-            monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
-            with patch("stock_ai_agent.monitor.Thread", InlineThread), patch.object(
-                monitor, "_sync_catalog_in_background"
-            ) as catalog_sync, patch.object(monitor, "_sync_reference_data_in_background") as history_sync:
-                monitor._sync_daily_reference_data(date(2026, 8, 17))
-
-        catalog_sync.assert_called_once()
-        history_sync.assert_not_called()
-
     def test_startup_benchmark_sync_stops_at_previous_weekday(self):
         config = configured_config()
 
@@ -353,7 +377,7 @@ class MonitorTests(unittest.TestCase):
             ), patch("stock_ai_agent.monitor.sync_benchmark_history", return_value={}) as sync_benchmarks:
                 monitor.initialize_trading_data(date(2026, 8, 17))
 
-        self.assertEqual(sync_benchmarks.call_args.kwargs["as_of"], date(2026, 8, 14))
+        sync_benchmarks.assert_not_called()
 
     def test_post_close_starts_incremental_history_sync(self):
         config = configured_config()
@@ -377,7 +401,7 @@ class MonitorTests(unittest.TestCase):
                 monitor.run_forever(max_iterations=1, on_update=updates.append, now_fn=lambda: close_now)
 
         self.assertEqual(updates[0].status, "reported")
-        history_sync.assert_called_once_with(close_now.date(), True)
+        history_sync.assert_not_called()
 
     def test_monitor_does_not_trade_when_startup_history_is_still_insufficient(self):
         config = configured_config()

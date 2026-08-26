@@ -86,6 +86,57 @@ class JournalTests(unittest.TestCase):
         self.assertEqual(len(normalized["decisions"]), 1)
         self.assertEqual(normalized["decisions"][0]["risk_reasons"], ["A", "B"])
 
+    def test_persisted_timeline_keeps_state_changes_but_removes_repeated_events(self):
+        report = {
+            "report_date": "2026-08-24",
+            "decision_timeline": [
+                {
+                    "event_at": "2026-08-24T09:30:00+08:00",
+                    "symbol": "301396.SZ",
+                    "phase": "decision",
+                    "direction": "观望",
+                    "approved": False,
+                    "target_weight": "0",
+                },
+                {
+                    "event_at": "2026-08-24T09:31:00+08:00",
+                    "symbol": "301396.SZ",
+                    "phase": "decision",
+                    "direction": "观望",
+                    "approved": False,
+                    "target_weight": "0",
+                },
+                {
+                    "event_at": "2026-08-24T10:00:00+08:00",
+                    "symbol": "301396.SZ",
+                    "phase": "decision",
+                    "direction": "持有",
+                    "approved": True,
+                    "target_weight": "0.2",
+                },
+                {
+                    "event_at": "2026-08-24T10:01:00+08:00",
+                    "symbol": "301396.SZ",
+                    "phase": "order",
+                    "order_id": "order-1",
+                    "status": "已提交",
+                },
+                {
+                    "event_at": "2026-08-24T10:02:00+08:00",
+                    "symbol": "301396.SZ",
+                    "phase": "order",
+                    "order_id": "order-1",
+                    "status": "已提交",
+                },
+            ],
+        }
+
+        normalized = normalize_daily_report(report)
+
+        self.assertEqual(len(normalized["decision_timeline"]), 3)
+        self.assertEqual(normalized["decision_timeline"][0]["event_at"], "2026-08-24T09:31:00+08:00")
+        self.assertEqual(normalized["decision_timeline"][-1]["status"], "已提交")
+
 
 if __name__ == "__main__":
     unittest.main()

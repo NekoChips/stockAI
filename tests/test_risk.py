@@ -100,6 +100,22 @@ class RiskTests(unittest.TestCase):
         self.assertFalse(result.decision.approved)
         self.assertIn("未启用交易", result.decision.reasons[0])
 
+    def test_empty_position_neutral_signal_is_recorded_as_watch(self):
+        result = self.engine.evaluate(signal(Direction.HOLD, Decimal("0.20")), Portfolio(Decimal("1000000")), quote())
+
+        self.assertEqual(result.decision.direction, Direction.WATCH)
+        self.assertIsNone(result.order)
+
+    def test_held_position_neutral_signal_is_recorded_as_hold(self):
+        portfolio = Portfolio(
+            Decimal("1000000"),
+            {"588170.SH": Position("588170.SH", 10000, 10000, Decimal("1.00"), Decimal("1.00"))},
+        )
+        result = self.engine.evaluate(signal(Direction.WATCH, Decimal("0")), portfolio, quote())
+
+        self.assertEqual(result.decision.direction, Direction.HOLD)
+        self.assertIsNone(result.order)
+
 
 if __name__ == "__main__":
     unittest.main()

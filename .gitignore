@@ -51,6 +51,7 @@ src/stock_ai_agent/spa/**
 !src/stock_ai_agent/spa/.gitkeep
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
 .pnpm-store/
 
 .worktrees/

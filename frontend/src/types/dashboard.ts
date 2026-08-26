@@ -73,6 +73,32 @@ export interface FillRow {
   order_id?: string;
 }
 
+export type DecisionEventType = 'decision' | 'order' | 'fill';
+
+export interface DecisionEvent {
+  type: DecisionEventType;
+  event_at: string;
+  symbol: string;
+  direction?: string;
+  approved?: boolean | null;
+  status?: string | null;
+  reasons?: string[];
+  strategy_id?: string | null;
+  order_id?: string | null;
+  quantity?: number | null;
+  price?: JsonDecimal | null;
+  fee?: JsonDecimal | null;
+  slippage?: JsonDecimal | null;
+  target_weight?: JsonDecimal | null;
+  phase?: string;
+}
+
+export interface DecisionEventsPayload {
+  events: DecisionEvent[];
+  as_of: string;
+  fill_count: number;
+}
+
 export interface DecisionRow {
   symbol: string;
   direction: string;
@@ -363,11 +389,20 @@ export interface DailyReportDecision {
 }
 
 export interface DailyReportTimelineEvent {
+  event_key?: string;
   event_at?: string;
   symbol?: string;
   phase?: string;
   direction?: string;
+  approved?: boolean;
+  target_weight?: JsonDecimal;
   status?: string;
+  filled_quantity?: number;
+  position_quantity?: number;
+  position_weight?: JsonDecimal;
+  position_state?: string;
+  strategy_id?: string;
+  order_id?: string;
   reasons?: string[];
 }
 

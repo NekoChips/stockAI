@@ -9,7 +9,7 @@ from threading import Lock
 from typing import Iterator, List
 
 from ..config import MySQLConnectionConfig
-from ..journal import normalize_daily_report
+from ..journal import deduplicate_decision_timeline, decision_event_state, decision_position_context, make_business_event_key, normalize_daily_report, order_event_state
 from ..models import Bar, Decision, Direction, Fill, OrderStatus, PaperOrder, Portfolio, Position, Quote, StrategySignal
 from ..strategy_catalog import strategy_definitions
 from ..strategy_runtime import profile_from_config
@@ -220,13 +220,18 @@ class MySQLMarketDataStore:
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS order_events (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY, order_id VARCHAR(64) NOT NULL, trade_date DATE NOT NULL, status VARCHAR(32) NOT NULL,
-                reason TEXT, event_at DATETIME(6) NOT NULL, INDEX idx_order_events_order (order_id, event_at)
+                filled_quantity BIGINT NOT NULL DEFAULT 0, reason TEXT, event_at DATETIME(6) NOT NULL, INDEX idx_order_events_order (order_id, event_at)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS decision_events (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY, trade_date DATE NOT NULL, symbol VARCHAR(32) NOT NULL, phase VARCHAR(24) NOT NULL,
                 direction VARCHAR(16) NULL, approved TINYINT NULL, target_weight DECIMAL(12,8) NULL, status VARCHAR(32) NULL,
-                reasons TEXT, strategy_id VARCHAR(128), order_id VARCHAR(64), event_at DATETIME(6) NOT NULL,
-                INDEX idx_decision_events_date_symbol (trade_date, symbol, event_at)
+                filled_quantity BIGINT NOT NULL DEFAULT 0, position_quantity BIGINT NOT NULL DEFAULT 0, position_weight DECIMAL(12,8) NOT NULL DEFAULT 0, position_state VARCHAR(16) NOT NULL DEFAULT 'unknown',
+                reasons TEXT, strategy_id VARCHAR(128), order_id VARCHAR(64),
+                event_key VARCHAR(128) NOT NULL, monitor_round VARCHAR(64) NULL, event_at DATETIME(6) NOT NULL,
+                created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+                UNIQUE KEY uq_decision_events_event_key (event_key),
+                INDEX idx_decision_events_date_symbol (trade_date, symbol, event_at),
+                INDEX idx_decision_events_retention (phase, event_at), INDEX idx_decision_events_order (order_id, event_at)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS futures_positions (
                 trade_date DATE NOT NULL, contract VARCHAR(16) NOT NULL, top10_long DECIMAL(20,2) NOT NULL DEFAULT 0,
@@ -281,6 +286,8 @@ class MySQLMarketDataStore:
                 self._migrate_strategy_profiles(cursor)
                 self._migrate_backtest_runs(cursor)
                 self._migrate_overseas_market_data(cursor)
+                self._migrate_decision_events(cursor)
+                self._migrate_order_events(cursor)
 
     @staticmethod
     def _migrate_market_quotes(cursor) -> None:
@@ -337,6 +344,52 @@ class MySQLMarketDataStore:
             columns = {row[0] for row in cursor.fetchall()}
             if "order_id" not in columns:
                 cursor.execute("ALTER TABLE fills ADD COLUMN order_id VARCHAR(64) NULL AFTER slippage")
+        except Exception:
+            return
+
+    @staticmethod
+    def _migrate_decision_events(cursor) -> None:
+        try:
+            cursor.execute("SHOW COLUMNS FROM decision_events")
+            columns = {row[0] for row in cursor.fetchall()}
+        except Exception:
+            return
+        if "filled_quantity" not in columns:
+            cursor.execute("ALTER TABLE decision_events ADD COLUMN filled_quantity BIGINT NOT NULL DEFAULT 0 AFTER status")
+        if "position_quantity" not in columns:
+            cursor.execute("ALTER TABLE decision_events ADD COLUMN position_quantity BIGINT NOT NULL DEFAULT 0 AFTER filled_quantity")
+        if "position_weight" not in columns:
+            cursor.execute("ALTER TABLE decision_events ADD COLUMN position_weight DECIMAL(12,8) NOT NULL DEFAULT 0 AFTER position_quantity")
+        if "position_state" not in columns:
+            cursor.execute("ALTER TABLE decision_events ADD COLUMN position_state VARCHAR(16) NOT NULL DEFAULT 'unknown' AFTER position_weight")
+        if "event_key" not in columns:
+            cursor.execute("ALTER TABLE decision_events ADD COLUMN event_key VARCHAR(128) NULL AFTER event_at")
+        cursor.execute("UPDATE decision_events SET event_key=CONCAT('legacy:', id) WHERE event_key IS NULL OR event_key='' ")
+        try:
+            cursor.execute("ALTER TABLE decision_events MODIFY event_key VARCHAR(128) NOT NULL")
+        except Exception:
+            pass
+        if "monitor_round" not in columns:
+            cursor.execute("ALTER TABLE decision_events ADD COLUMN monitor_round VARCHAR(64) NULL AFTER event_key")
+        if "created_at" not in columns:
+            cursor.execute("ALTER TABLE decision_events ADD COLUMN created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) AFTER event_at")
+        for statement in (
+            "ALTER TABLE decision_events ADD UNIQUE KEY uq_decision_events_event_key (event_key)",
+            "ALTER TABLE decision_events ADD INDEX idx_decision_events_retention (phase, event_at)",
+            "ALTER TABLE decision_events ADD INDEX idx_decision_events_order (order_id, event_at)",
+        ):
+            try:
+                cursor.execute(statement)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _migrate_order_events(cursor) -> None:
+        try:
+            cursor.execute("SHOW COLUMNS FROM order_events")
+            columns = {row[0] for row in cursor.fetchall()}
+            if "filled_quantity" not in columns:
+                cursor.execute("ALTER TABLE order_events ADD COLUMN filled_quantity BIGINT NOT NULL DEFAULT 0 AFTER status")
         except Exception:
             return
 
@@ -715,7 +768,7 @@ class MySQLMarketDataStore:
                 if rows:
                     cursor.executemany("INSERT INTO positions (symbol, quantity, available_quantity, average_cost, last_price, realized_pnl, highest_price) VALUES (%s, %s, %s, %s, %s, %s, %s)", rows)
 
-    def record_decision(self, decision: Decision, trade_date: date) -> None:
+    def record_decision(self, decision: Decision, trade_date: date, portfolio: Portfolio | None = None) -> None:
         self.initialize()
         signal = decision.source_signal
         with self._connect() as conn:
@@ -728,7 +781,7 @@ class MySQLMarketDataStore:
                 reasons = list(decision.reasons)
                 if existing and existing[1]:
                     try:
-                        reasons = list(dict.fromkeys([*json.loads(existing[1]), *reasons]))
+                        reasons = list(dict.fromkeys([*json.loads(existing[1]), *reasons]))[-20:]
                     except (TypeError, ValueError):
                         pass
                 values = (
@@ -756,8 +809,26 @@ class MySQLMarketDataStore:
                         (trade_date.isoformat(), decision.symbol, *values),
                     )
                 cursor.execute(
-                    "INSERT INTO decision_events (trade_date, symbol, phase, direction, approved, target_weight, reasons, strategy_id, event_at) VALUES (%s, %s, 'decision', %s, %s, %s, %s, %s, %s)",
-                    (trade_date.isoformat(), decision.symbol, decision.direction.value, int(decision.approved), str(decision.target_weight), _dumps(decision.reasons), signal.strategy_id if signal else None, _database_datetime(datetime.now())),
+                    "SELECT id, direction, approved, target_weight, strategy_id FROM decision_events WHERE trade_date=%s AND symbol=%s AND phase='decision' ORDER BY id DESC LIMIT 1",
+                    (trade_date.isoformat(), decision.symbol),
+                )
+                previous_event = cursor.fetchone()
+                previous_state = (
+                    str(previous_event[1]), str(previous_event[3]), bool(previous_event[2]), str(previous_event[4] or "")
+                ) if previous_event else None
+                state = decision_event_state(decision)
+                if previous_state == state:
+                    return
+                position_quantity, position_weight, position_state = decision_position_context(portfolio, decision.symbol)
+                cursor.execute(
+                    "INSERT INTO decision_events (trade_date, symbol, phase, direction, approved, target_weight, status, filled_quantity, position_quantity, position_weight, position_state, reasons, strategy_id, event_key, event_at) VALUES (%s, %s, 'decision', %s, %s, %s, NULL, 0, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        trade_date.isoformat(), decision.symbol, decision.direction.value, int(decision.approved),
+                        str(decision.target_weight), position_quantity, str(position_weight), position_state,
+                        _dumps(decision.reasons), signal.strategy_id if signal else None,
+                        make_business_event_key("decision", trade_date, decision.symbol, state, previous_event[0] if previous_event else None),
+                        _database_datetime(datetime.now()),
+                    ),
                 )
 
     def compact_watch_decisions(self) -> int:
@@ -771,6 +842,60 @@ class MySQLMarketDataStore:
             )""",
             (Direction.WATCH.value, Direction.WATCH.value),
         )
+
+    def compact_decision_events(self, trade_date: date | None = None) -> int:
+        """Remove consecutive duplicate business events without touching order history."""
+        self.initialize()
+        sql = (
+            "SELECT id, trade_date, symbol, phase, direction, approved, target_weight, status, "
+            "filled_quantity, reasons, strategy_id, order_id, event_key, event_at "
+            "FROM decision_events"
+        )
+        params: tuple = ()
+        if trade_date is not None:
+            sql += " WHERE trade_date=%s"
+            params = (trade_date.isoformat(),)
+        sql += " ORDER BY trade_date ASC, symbol ASC, phase ASC, event_at ASC, id ASC"
+        rows = self._fetchall(sql, params)
+        timeline = [
+            {
+                "_row_id": row[0], "trade_date": row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1]),
+                "symbol": row[2], "phase": row[3], "direction": row[4], "approved": row[5],
+                "target_weight": str(row[6]) if row[6] is not None else None, "status": row[7],
+                "filled_quantity": int(row[8] or 0), "reasons": _loads(row[9]), "strategy_id": row[10],
+                "order_id": row[11], "event_key": row[12], "event_at": _iso_datetime(row[13]),
+            }
+            for row in rows
+        ]
+        retained_ids = {item["_row_id"] for item in deduplicate_decision_timeline(timeline)}
+        duplicate_ids = [item["_row_id"] for item in timeline if item["_row_id"] not in retained_ids]
+        if not duplicate_ids:
+            return 0
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                for start in range(0, len(duplicate_ids), 500):
+                    batch = duplicate_ids[start:start + 500]
+                    placeholders = ", ".join(["%s"] * len(batch))
+                    cursor.execute(f"DELETE FROM decision_events WHERE id IN ({placeholders})", tuple(batch))
+        return len(duplicate_ids)
+
+    def purge_decision_events(
+        self,
+        as_of: date | None = None,
+        decision_retention_days: int = 30,
+        order_retention_days: int = 730,
+    ) -> int:
+        """Delete expired strategy/order events without touching daily reports."""
+        self.initialize()
+        reference = as_of or date.today()
+        removed = 0
+        for phase, retention_days in (("decision", decision_retention_days), ("order", order_retention_days)):
+            cutoff = (reference - timedelta(days=int(retention_days))).isoformat()
+            removed += self._execute(
+                "DELETE FROM decision_events WHERE phase=%s AND event_at < %s LIMIT 5000",
+                (phase, cutoff),
+            )
+        return removed
 
     def load_decisions(self, trade_date: date) -> List[Decision]:
         self.initialize()
@@ -786,17 +911,32 @@ class MySQLMarketDataStore:
         happened = order.updated_at or order.created_at
         day = trade_date or happened.date()
         values = (order.order_id, day.isoformat(), order.symbol, order.asset_type, order.direction.value, order.quantity, str(order.requested_price), order.filled_quantity, str(order.average_fill_price), order.status.value, order.reason, order.rejected_reason, _database_datetime(order.created_at), _database_datetime(order.submitted_at) if order.submitted_at else None, _database_datetime(happened))
+        previous_event = self._fetchone(
+            "SELECT id, direction, status, filled_quantity FROM decision_events WHERE phase='order' AND order_id=%s ORDER BY id DESC LIMIT 1",
+            (order.order_id,),
+        )
+        previous_state = (
+            str(previous_event[1]), str(previous_event[2]), int(previous_event[3] or 0)
+        ) if previous_event else None
+        state = order_event_state(order)
+        changed = previous_state != state
         self._execute(
             """INSERT INTO orders (order_id, trade_date, symbol, asset_type, direction, quantity, requested_price, filled_quantity, average_fill_price, status, reason, rejected_reason, created_at, submitted_at, updated_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON DUPLICATE KEY UPDATE filled_quantity=VALUES(filled_quantity), average_fill_price=VALUES(average_fill_price), status=VALUES(status), reason=VALUES(reason), rejected_reason=VALUES(rejected_reason), submitted_at=VALUES(submitted_at), updated_at=VALUES(updated_at)""",
             values,
         )
-        self._execute("INSERT INTO order_events (order_id, trade_date, status, reason, event_at) VALUES (%s, %s, %s, %s, %s)", (order.order_id, day.isoformat(), order.status.value, order.reason or order.rejected_reason, _database_datetime(happened)))
-        self._execute(
-            "INSERT INTO decision_events (trade_date, symbol, phase, direction, status, reasons, order_id, event_at) VALUES (%s, %s, 'order', %s, %s, %s, %s, %s)",
-            (day.isoformat(), order.symbol, order.direction.value, order.status.value, _dumps([order.reason or order.rejected_reason] if (order.reason or order.rejected_reason) else []), order.order_id, _database_datetime(happened)),
-        )
+        if changed:
+            self._execute("INSERT INTO order_events (order_id, trade_date, status, filled_quantity, reason, event_at) VALUES (%s, %s, %s, %s, %s, %s)", (order.order_id, day.isoformat(), order.status.value, order.filled_quantity, order.reason or order.rejected_reason, _database_datetime(happened)))
+            self._execute(
+                "INSERT INTO decision_events (trade_date, symbol, phase, direction, status, filled_quantity, reasons, order_id, event_key, event_at) VALUES (%s, %s, 'order', %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    day.isoformat(), order.symbol, order.direction.value, order.status.value, order.filled_quantity,
+                    _dumps([order.reason or order.rejected_reason] if (order.reason or order.rejected_reason) else []),
+                    order.order_id, make_business_event_key("order", day, order.symbol, state, previous_event[0] if previous_event else None),
+                    _database_datetime(happened),
+                ),
+            )
         return order
 
     def load_open_orders(self, symbol: str | None = None):
@@ -820,12 +960,12 @@ class MySQLMarketDataStore:
 
     def load_decision_events(self, trade_date: date, symbol: str | None = None) -> list[dict]:
         self.initialize()
-        sql = "SELECT symbol, phase, direction, approved, target_weight, status, reasons, strategy_id, order_id, event_at FROM decision_events WHERE trade_date=%s"
+        sql = "SELECT symbol, phase, direction, approved, target_weight, status, filled_quantity, position_quantity, position_weight, position_state, reasons, strategy_id, order_id, event_key, event_at FROM decision_events WHERE trade_date=%s"
         params: tuple = (trade_date.isoformat(),)
         if symbol:
             sql += " AND symbol=%s"
             params = (*params, symbol)
-        return [{"symbol": row[0], "phase": row[1], "direction": row[2], "approved": bool(row[3]) if row[3] is not None else None, "target_weight": str(row[4]) if row[4] is not None else None, "status": row[5], "reasons": _loads(row[6]), "strategy_id": row[7], "order_id": row[8], "event_at": _iso_datetime(row[9])} for row in self._fetchall(sql + " ORDER BY event_at ASC", params)]
+        return [{"symbol": row[0], "phase": row[1], "direction": row[2], "approved": bool(row[3]) if row[3] is not None else None, "target_weight": str(row[4]) if row[4] is not None else None, "status": row[5], "filled_quantity": int(row[6] or 0), "position_quantity": int(row[7] or 0), "position_weight": str(row[8] or 0), "position_state": row[9], "reasons": _loads(row[10]), "strategy_id": row[11], "order_id": row[12], "event_key": row[13], "event_at": _iso_datetime(row[14])} for row in self._fetchall(sql + " ORDER BY event_at ASC, id ASC", params)]
 
     def save_futures_positions(self, rows: list[dict]) -> int:
         if not rows:

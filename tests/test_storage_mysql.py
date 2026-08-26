@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime
 
 from stock_ai_agent.config import MySQLConnectionConfig
+from stock_ai_agent.journal import normalize_daily_report
 from stock_ai_agent.storage.mysql import MySQLMarketDataStore
 
 
@@ -94,6 +95,32 @@ class MySQLStorageTests(unittest.TestCase):
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS strategy_profiles" in statement for statement in statements))
         self.assertTrue(any("CREATE TABLE IF NOT EXISTS strategy_change_log" in statement for statement in statements))
 
+    def test_schema_contains_idempotent_business_event_fields(self):
+        store = MySQLMarketDataStore(
+            MySQLConnectionConfig(host="127.0.0.1", port=3306, database="stock_ai", username="agent", password="secret")
+        )
+        statements = []
+
+        class Cursor:
+            def __enter__(self): return self
+            def __exit__(self, exc_type, exc, traceback): return False
+            def execute(self, statement): statements.append(statement)
+
+        class Connection:
+            def cursor(self): return Cursor()
+
+        @contextmanager
+        def fake_connect():
+            yield Connection()
+
+        store._connect = fake_connect
+        store.initialize()
+
+        decision_events = next(statement for statement in statements if "CREATE TABLE IF NOT EXISTS decision_events" in statement)
+        self.assertIn("event_key", decision_events)
+        self.assertIn("uq_decision_events_event_key", decision_events)
+        self.assertIn("position_state", decision_events)
+
     def test_daily_report_methods_preserve_summary_and_detail_contract(self):
         store = MySQLMarketDataStore(
             MySQLConnectionConfig(host="127.0.0.1", port=3306, database="stock_ai", username="stock_agent", password="secret")
@@ -111,7 +138,7 @@ class MySQLStorageTests(unittest.TestCase):
 
         self.assertIn("ON DUPLICATE KEY UPDATE", executed[0][0])
         self.assertEqual(rows[0]["report_date"], "2026-08-20")
-        self.assertEqual(detail, report)
+        self.assertEqual(detail, normalize_daily_report(report))
 
     def test_overseas_rows_accept_iso_string_fetch_time(self):
         store = MySQLMarketDataStore(

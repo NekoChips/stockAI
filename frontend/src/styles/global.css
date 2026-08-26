@@ -15,6 +15,7 @@
   --loss-wash: #ecfdf5;
   --warning: #d97706;
   --ring: #0f766e;
+  --on-brand: #ffffff;
   --blue-dark: var(--brand);
   --quiet: #64748b;
   --chart-crosshair: #8aa6ca;
@@ -38,6 +39,7 @@
   --loss-wash: #0f2e24;
   --warning: #fbbf24;
   --ring: #2dd4bf;
+  --on-brand: #042f2e;
   --blue-dark: var(--brand);
   --quiet: #94a3b8;
   --chart-crosshair: #64748b;
@@ -104,6 +106,42 @@ body {
 .app-shell-content {
   padding: 24px;
   background: var(--bg);
+}
+
+/* 看板「实时 / 复盘」：品牌色实心底激活态 */
+.dash-view-segmented.ant-segmented {
+  background: var(--surface-2);
+  padding: 3px;
+}
+
+.dash-view-segmented .ant-segmented-item {
+  color: var(--subtle);
+  font-weight: 600;
+  min-height: 32px;
+}
+
+.dash-view-segmented .ant-segmented-item:hover:not(.ant-segmented-item-selected) {
+  color: var(--ink);
+}
+
+.dash-view-segmented .ant-segmented-thumb {
+  background: var(--brand) !important;
+}
+
+.dash-view-segmented .ant-segmented-item-selected,
+.dash-view-segmented .ant-segmented-item-selected:hover {
+  color: var(--on-brand) !important;
+  font-weight: 700;
+  background: var(--brand) !important;
+}
+
+.dash-view-segmented .ant-segmented-item-selected .ant-segmented-item-label,
+.dash-view-segmented .ant-segmented-item-selected .ant-segmented-item-label:hover {
+  color: var(--on-brand) !important;
+}
+
+.dash-view-segmented .ant-segmented-item-label {
+  padding-inline: 14px;
 }
 
 .theme-toggle {
@@ -618,8 +656,51 @@ body {
   background: var(--surface);
 }
 
+.account-strip-layout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
 .account-strip-hero {
+  flex: 1 1 280px;
+  padding: 18px 16px;
   background: linear-gradient(105deg, var(--surface) 0%, var(--brand-soft) 100%);
+  border-right: 1px solid var(--line);
+}
+
+.account-strip-kpis {
+  display: flex;
+  flex: 1 1 320px;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+.account-strip-kpi {
+  flex: 1 1 110px;
+  padding: 18px 16px;
+  border-right: 1px solid var(--line);
+  min-width: 110px;
+}
+
+.account-strip-kpi:last-child {
+  border-right: 0;
+}
+
+@media (max-width: 767px) {
+  .account-strip-hero {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .account-strip-kpi {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .account-strip-kpi:last-child {
+    border-bottom: 0;
+  }
 }
 
 .positions-footer {

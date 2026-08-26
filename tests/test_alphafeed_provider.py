@@ -195,7 +195,7 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         adapter.get_quote("588170.SH")
         adapter.get_quote("588170.SH")
 
-        self.assertEqual(waits, [7.5])
+        self.assertEqual(waits, [6.0])
 
     def test_quote_cache_avoids_duplicate_sdk_calls(self):
         client = FakeAlphaFeedClient(quote_frame=FakeFrame([{"symbol": "588170.SH", "last_price": 1.0, "prev_close": 1.0, "open": 1.0, "high": 1.0, "low": 1.0}]))
@@ -228,7 +228,7 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         adapters[0].get_quote("588170.SH")
         adapters[1].get_quote("588170.SH")
 
-        self.assertEqual(waits, [7.5])
+        self.assertEqual(waits, [6.0])
 
     def test_quote_requests_are_split_into_five_symbol_batches(self):
         symbols = [f"60000{index}.SH" for index in range(1, 7)]
@@ -300,7 +300,7 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(adapter.quote_max_symbols_per_request, 5)
-        self.assertEqual(adapter.quote_max_requests_per_minute, 8)
+        self.assertEqual(adapter.quote_max_requests_per_minute, 10)
         self.assertEqual(adapter.kline_max_symbols_per_request, 1)
         self.assertEqual(adapter.kline_max_requests_per_minute, 10)
 

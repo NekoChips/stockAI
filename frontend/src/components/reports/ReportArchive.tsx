@@ -47,6 +47,30 @@ function decisionCopy(item: DailyReportDecision): string {
   return reasons.length ? reasons.join('；') : '策略未提供补充说明。';
 }
 
+function phaseLabel(phase?: string): string {
+  if (phase === 'decision') return '策略评估';
+  if (phase === 'order') return '订单状态';
+  return '业务事件';
+}
+
+function timelineStatus(row: DailyReportTimelineEvent): string {
+  if (row.phase === 'decision') {
+    if (row.direction === '观望') return '观望（未触发交易）';
+    if (row.direction === '持有') return '持有（未触发调仓）';
+    return row.direction || (row.approved ? '风控通过' : '未执行');
+  }
+  const labels: Record<string, string> = {
+    已创建: '订单已创建',
+    风控通过: '风控通过',
+    已提交: '订单已提交',
+    部分成交: '部分成交',
+    已成交: '模拟成交',
+    已拒绝: '订单已拒绝',
+    已取消: '订单已取消',
+  };
+  return labels[row.status || ''] || row.status || row.direction || '状态已更新';
+}
+
 function ReportListItem({
   item,
   active,
@@ -180,11 +204,27 @@ function ReportDetailPanel({ report, loading }: { report: DailyReport | null; lo
       render: (v?: string) => (v ? v.slice(11, 19) : ''),
     },
     { title: '证券', dataIndex: 'symbol', key: 'symbol', render: (v) => v ?? '' },
-    { title: '阶段', dataIndex: 'phase', key: 'phase', render: (v) => v ?? '' },
+    {
+      title: '阶段',
+      dataIndex: 'phase',
+      key: 'phase',
+      render: (v?: string) => <Tag>{phaseLabel(v)}</Tag>,
+    },
     {
       title: '状态',
       key: 'status',
-      render: (_, row) => row.direction ?? row.status ?? '',
+      render: (_, row) => (
+        <Tag color={row.phase === 'order' && row.status === '已成交' ? 'success' : 'blue'}>
+          {timelineStatus(row)}
+        </Tag>
+      ),
+    },
+    {
+      title: '持仓',
+      key: 'position_state',
+      render: (_, row) => (row.phase === 'decision'
+        ? (row.position_state === 'held' ? '有持仓' : row.position_state === 'empty' ? '空仓' : '未知')
+        : '—'),
     },
     {
       title: '说明',
@@ -331,22 +371,22 @@ function ReportDetailPanel({ report, loading }: { report: DailyReport | null; lo
         )}
       </section>
 
-      <section style={{ padding: 20 }}>
+      <section className="report-section">
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
           <Typography.Title level={5} style={{ margin: 0 }}>
-            决策与订单轨迹
+            策略与执行轨迹
           </Typography.Title>
           <Typography.Text type="secondary" className="tabular">
-            {timeline.length} 条
+            {timeline.length} 条业务事件
           </Typography.Text>
         </div>
         <Table
           size="small"
-          rowKey={(row, index) => `${row.event_at ?? ''}-${row.symbol ?? ''}-${index}`}
+          rowKey={(row, index) => row.event_key || `${row.event_at ?? ''}-${row.symbol ?? ''}-${row.order_id ?? ''}-${index}`}
           columns={timelineColumns}
           dataSource={timeline}
-          pagination={false}
-          locale={{ emptyText: '本次归档没有额外订单状态变化。' }}
+          pagination={{ pageSize: 20, hideOnSinglePage: true, showSizeChanger: false }}
+          locale={{ emptyText: '本次归档没有策略或订单状态变化。' }}
           scroll={{ x: true }}
         />
       </section>
