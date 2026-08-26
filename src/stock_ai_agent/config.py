@@ -109,6 +109,7 @@ class MonitorConfig:
     post_close_report_time: str
     respect_market_hours: bool
     settle_on_start: bool
+    quote_poll_seconds: float = 6.5
 
 
 @dataclass(frozen=True)
@@ -250,6 +251,7 @@ def load_config(path: str | Path = "config/default.yaml") -> AppConfig:
             post_close_report_time=str(monitor.get("post_close_report_time", "15:05")),
             respect_market_hours=bool(monitor.get("respect_market_hours", True)),
             settle_on_start=bool(monitor.get("settle_on_start", True)),
+            quote_poll_seconds=float(monitor.get("quote_poll_seconds", 6.5)),
         ),
         web=WebConfig(
             require_basic_auth=bool(web.get("require_basic_auth", False)),

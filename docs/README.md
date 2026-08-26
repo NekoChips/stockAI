@@ -108,6 +108,7 @@ YYYY-MM-DD-topic.md
 - [React + Ant Design SPA 规格](./specs/2026-08-25-react-antd-spa-design.md)
 - [双主题与交互增强规格](./specs/2026-08-26-dual-theme-ux-design.md)
 - [AlphaFeed 海外市场数据规格](./specs/2026-08-26-alphafeed-external-market.md)
+- [实时快照与日 K 分时调度设计](./specs/2026-08-26-market-data-scheduling-design.md)
 - [策略设计规格](./specs/2026-08-21-strategy-design.md)
 - [React + Ant Design SPA 实施计划](./plans/2026-08-25-react-antd-spa.md)
 - [项目优化计划](./plans/2026-08-21-optimization.md)

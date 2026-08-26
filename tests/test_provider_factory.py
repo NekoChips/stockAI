@@ -107,6 +107,25 @@ class ProviderFactoryTests(unittest.TestCase):
         self.assertEqual(provider.last_source, "akshare")
         self.assertEqual(sleeps, [])
 
+    def test_market_provider_fills_partial_primary_batch_from_fallback(self):
+        from datetime import datetime, timezone
+        from decimal import Decimal
+        from stock_ai_agent.models import Quote
+
+        def quote(symbol, source):
+            now = datetime.now(timezone.utc)
+            return Quote(symbol, symbol, now, Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("0"), source, now)
+
+        first = type("PartialProvider", (), {"get_quotes": lambda self, symbols: {symbols[0]: quote(symbols[0], "alphafeed")}})()
+        second = type("FallbackProvider", (), {"get_quotes": lambda self, symbols: {symbol: quote(symbol, "akshare") for symbol in symbols}})()
+        provider = FallbackMarketDataProvider([("alphafeed", first), ("akshare", second)])
+
+        result = provider.get_quotes(["588170.SH", "588200.SH"])
+
+        self.assertEqual(set(result), {"588170.SH", "588200.SH"})
+        self.assertEqual(result["588170.SH"].source, "alphafeed")
+        self.assertEqual(result["588200.SH"].source, "akshare")
+
 
 if __name__ == "__main__":
     unittest.main()
