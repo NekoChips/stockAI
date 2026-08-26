@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -167,6 +167,9 @@ def load_external_strategy_context(
     if lhb_rows is not None:
         lhb_rows = [row for row in lhb_rows if _is_recent_external_row(row, as_of)]
     sector = store.load_instrument_sector(symbol) if hasattr(store, "load_instrument_sector") else None
+    if lhb_rows is not None:
+        for row in lhb_rows:
+            row.setdefault("sector", store.load_instrument_sector(str(row.get("symbol"))) if hasattr(store, "load_instrument_sector") else None)
     auction_gap = None
     if quote is not None and quote.previous_close > 0:
         auction_gap = ((quote.open_price / quote.previous_close) - Decimal("1")) * Decimal("100")
@@ -189,11 +192,17 @@ def load_external_strategy_context(
         auction_gap_pct=auction_gap,
         seat_profiles=profiles,
         quant_seats=quant_seats,
+        sector_defaulted=not bool(sector),
     )
 
 
 def _is_recent_external_row(row: dict[str, Any], as_of: date, max_age_days: int = 5) -> bool:
-    """Weekend-aware freshness guard for daily post-market evidence."""
+    """Allow at most one source-market session of stale daily evidence.
+
+    ``exchange_calendars`` is optional at import time so local mock development
+    remains lightweight. Production images include it; when unavailable we keep
+    the older weekend-aware bound as a conservative compatibility fallback.
+    """
     raw_date = row.get("trade_date")
     if not raw_date:
         return False
@@ -201,7 +210,23 @@ def _is_recent_external_row(row: dict[str, Any], as_of: date, max_age_days: int 
         source_date = date.fromisoformat(str(raw_date)[:10])
     except ValueError:
         return False
-    return 0 <= (as_of - source_date).days <= max_age_days
+    if source_date > as_of:
+        return False
+    market = str(row.get("market") or "").upper()
+    calendar_name = "XNYS" if market == "US" else "XKRX" if market in {"KR", "KOREA"} else "XSHG"
+    try:
+        import exchange_calendars as xcals
+
+        calendar = xcals.get_calendar(calendar_name)
+        cursor = source_date + timedelta(days=1)
+        sessions_since = 0
+        while cursor <= as_of and sessions_since <= 1:
+            if calendar.is_session(cursor.isoformat()):
+                sessions_since += 1
+            cursor += timedelta(days=1)
+        return sessions_since <= 1
+    except Exception:  # noqa: BLE001 - optional dependency/calendar coverage fallback
+        return (as_of - source_date).days <= max_age_days
 
 
 def _unavailable_signal(strategy_id: str, symbol: str):

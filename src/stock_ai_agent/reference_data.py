@@ -1,12 +1,53 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from .config import AppConfig
 from .data.providers import create_history_data_provider, create_market_data_provider
 from .history_sync import missing_history_range
 from .universe import UniverseError, validate_hs_symbol
+from .watchlist import effective_watchlist
+
+
+SECTOR_KEYWORDS = {
+    "科技": "信息技术",
+    "信息": "信息技术",
+    "芯片": "信息技术",
+    "医药": "医药卫生",
+    "医疗": "医药卫生",
+    "金融": "金融地产",
+    "地产": "金融地产",
+    "能源": "能源",
+    "工业": "工业",
+    "消费": "可选消费",
+    "食品": "必需消费",
+    "材料": "材料",
+    "公用": "公用事业",
+    "通信": "电信服务",
+}
+
+
+class AKShareSectorAdapter:
+    """Resolve a single A-share instrument's broad strategy sector."""
+
+    def get_sector(self, symbol: str, name: str, asset_type: str) -> str | None:
+        del asset_type
+        for keyword, sector in SECTOR_KEYWORDS.items():
+            if keyword in name:
+                return sector
+        try:
+            import akshare as ak
+            function = getattr(ak, "stock_individual_info_em", None)
+            if function is None:
+                return None
+            frame = function(symbol=str(symbol).split(".", 1)[0])
+            for _, row in frame.iterrows():
+                if str(row.iloc[0]) in {"行业", "所属行业"}:
+                    return str(row.iloc[1]) or None
+        except Exception:  # noqa: BLE001 - source failure is a data-health event
+            return None
+        return None
 
 
 def sync_instrument_catalog(
@@ -68,3 +109,32 @@ def sync_benchmark_history(config: AppConfig, store: Any, adapter=None, as_of: d
             source=f"{source}_benchmark",
         )
     return counts
+
+
+def sync_sector_mappings(
+    config: AppConfig,
+    store: Any,
+    adapter=None,
+    symbols: list[str] | None = None,
+    as_of: date | None = None,
+) -> int:
+    adapter = adapter or AKShareSectorAdapter()
+    items = [
+        {"symbol": item.symbol, "name": item.name, "asset_type": item.asset_type}
+        for item in effective_watchlist(config, store)
+    ]
+    allowed = set(symbols or [])
+    count = 0
+    for item in items:
+        symbol = str(item["symbol"])
+        if allowed and symbol not in allowed:
+            continue
+        sector = adapter.get_sector(symbol, str(item.get("name") or symbol), str(item.get("asset_type") or ""))
+        if not sector:
+            continue
+        store.save_sector_mapping(symbol, sector, source=getattr(adapter, "last_source", "akshare") or "akshare")
+        count += 1
+    if hasattr(store, "save_data_task_status"):
+        now = as_of or date.today()
+        store.save_data_task_status("sector_mapping", now, "success" if count else "degraded", count, max(0, len(items) - count), "未找到板块映射的标的使用综合板块。", datetime.now(), datetime.now())
+    return count

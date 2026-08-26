@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from queue import Empty, LifoQueue
 from threading import Lock
@@ -239,8 +239,16 @@ class MySQLMarketDataStore:
             """CREATE TABLE IF NOT EXISTS overseas_market_data (
                 market VARCHAR(32) NOT NULL, symbol VARCHAR(32) NOT NULL, trade_date DATE NOT NULL, name VARCHAR(128) NULL,
                 prev_close DECIMAL(20,6) NOT NULL, close_price DECIMAL(20,6) NOT NULL, change_pct DECIMAL(10,6) NOT NULL,
-                source VARCHAR(64) NOT NULL DEFAULT 'akshare', fetched_at DATETIME(6) NOT NULL,
+                source_symbol VARCHAR(64) NOT NULL, is_proxy TINYINT NOT NULL DEFAULT 0,
+                data_status VARCHAR(24) NOT NULL DEFAULT 'ready', source VARCHAR(64) NOT NULL DEFAULT 'akshare', fetched_at DATETIME(6) NOT NULL,
                 PRIMARY KEY (market, symbol, trade_date), INDEX idx_overseas_trade_date (trade_date)
+            ) CHARACTER SET utf8mb4""",
+            """CREATE TABLE IF NOT EXISTS data_sync_status (
+                task_name VARCHAR(64) PRIMARY KEY, trade_date DATE NOT NULL, status VARCHAR(24) NOT NULL,
+                success_count INT NOT NULL DEFAULT 0, failure_count INT NOT NULL DEFAULT 0,
+                error_summary TEXT, started_at DATETIME(6) NOT NULL, finished_at DATETIME(6) NOT NULL,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_data_sync_status_date (trade_date, status)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS instrument_sector_mapping (
                 symbol VARCHAR(32) PRIMARY KEY, sector VARCHAR(64) NOT NULL, source VARCHAR(32) NOT NULL,
@@ -272,6 +280,7 @@ class MySQLMarketDataStore:
                 self._migrate_watchlist(cursor)
                 self._migrate_strategy_profiles(cursor)
                 self._migrate_backtest_runs(cursor)
+                self._migrate_overseas_market_data(cursor)
 
     @staticmethod
     def _migrate_market_quotes(cursor) -> None:
@@ -296,6 +305,20 @@ class MySQLMarketDataStore:
             cursor.execute("UPDATE market_quotes SET observed_at=quoted_at WHERE observed_at='' ")
         cursor.execute("ALTER TABLE market_quotes ADD UNIQUE KEY uq_market_quotes_tick (trade_date, symbol, observed_at)")
         cursor.execute("ALTER TABLE market_quotes ADD INDEX idx_market_quotes_latest (symbol, trade_date, observed_at)")
+
+    @staticmethod
+    def _migrate_overseas_market_data(cursor) -> None:
+        try:
+            cursor.execute("SHOW COLUMNS FROM overseas_market_data")
+            columns = {row[0] for row in cursor.fetchall()}
+        except AttributeError:
+            return
+        if "source_symbol" not in columns:
+            cursor.execute("ALTER TABLE overseas_market_data ADD COLUMN source_symbol VARCHAR(64) NOT NULL DEFAULT '' AFTER symbol")
+        if "is_proxy" not in columns:
+            cursor.execute("ALTER TABLE overseas_market_data ADD COLUMN is_proxy TINYINT NOT NULL DEFAULT 0 AFTER source_symbol")
+        if "data_status" not in columns:
+            cursor.execute("ALTER TABLE overseas_market_data ADD COLUMN data_status VARCHAR(24) NOT NULL DEFAULT 'ready' AFTER is_proxy")
 
     @staticmethod
     def _migrate_positions(cursor) -> None:
@@ -824,15 +847,37 @@ class MySQLMarketDataStore:
             return 0
         self.initialize()
         now = _database_datetime(datetime.now())
-        values = [(str(item["market"]), str(item["symbol"]), str(item["trade_date"]), item.get("name"), str(item["prev_close"]), str(item["close_price"]), str(item["change_pct"]), str(item.get("source", "akshare")), now) for item in rows]
-        self._executemany("""INSERT INTO overseas_market_data (market, symbol, trade_date, name, prev_close, close_price, change_pct, source, fetched_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE name=VALUES(name), prev_close=VALUES(prev_close), close_price=VALUES(close_price), change_pct=VALUES(change_pct), source=VALUES(source), fetched_at=VALUES(fetched_at)""", values)
+        values = []
+        for item in rows:
+            fetched_at = item.get("fetched_at")
+            if isinstance(fetched_at, str):
+                try:
+                    fetched_at = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+                except ValueError:
+                    fetched_at = None
+            if not isinstance(fetched_at, datetime):
+                fetched_at = datetime.now(timezone.utc)
+            if fetched_at.tzinfo is not None:
+                fetched_at = fetched_at.astimezone(timezone.utc).replace(tzinfo=None)
+            values.append((str(item["market"]), str(item["symbol"]), str(item.get("source_symbol") or item["symbol"]), int(bool(item.get("is_proxy", False))), str(item.get("data_status", "ready")), str(item["trade_date"]), item.get("name"), str(item["prev_close"]), str(item["close_price"]), str(item["change_pct"]), str(item.get("source", "akshare")), _database_datetime(fetched_at)))
+        self._executemany("""INSERT INTO overseas_market_data (market, symbol, source_symbol, is_proxy, data_status, trade_date, name, prev_close, close_price, change_pct, source, fetched_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE source_symbol=VALUES(source_symbol), is_proxy=VALUES(is_proxy), data_status=VALUES(data_status), name=VALUES(name), prev_close=VALUES(prev_close), close_price=VALUES(close_price), change_pct=VALUES(change_pct), source=VALUES(source), fetched_at=VALUES(fetched_at)""", values)
         return len(values)
 
     def load_latest_overseas_data(self, market: str | None = None) -> list[dict]:
         self.initialize()
         where, params = ("WHERE market=%s", (market,)) if market else ("", ())
-        rows = self._fetchall(f"SELECT o.market, o.symbol, o.trade_date, o.name, o.prev_close, o.close_price, o.change_pct, o.source FROM overseas_market_data o JOIN (SELECT market, symbol, MAX(trade_date) AS latest_date FROM overseas_market_data {where} GROUP BY market, symbol) latest ON latest.market=o.market AND latest.symbol=o.symbol AND latest.latest_date=o.trade_date ORDER BY o.market, o.symbol", params)
-        return [{"market": row[0], "symbol": row[1], "trade_date": row[2].isoformat() if hasattr(row[2], "isoformat") else str(row[2]), "name": row[3], "prev_close": str(row[4]), "close_price": str(row[5]), "change_pct": str(row[6]), "source": row[7]} for row in rows]
+        rows = self._fetchall(f"SELECT o.market, o.symbol, o.source_symbol, o.is_proxy, o.data_status, o.trade_date, o.name, o.prev_close, o.close_price, o.change_pct, o.source, o.fetched_at FROM overseas_market_data o JOIN (SELECT market, symbol, MAX(trade_date) AS latest_date FROM overseas_market_data {where} GROUP BY market, symbol) latest ON latest.market=o.market AND latest.symbol=o.symbol AND latest.latest_date=o.trade_date ORDER BY o.market, o.symbol", params)
+        return [{"market": row[0], "symbol": row[1], "source_symbol": row[2], "is_proxy": bool(row[3]), "data_status": row[4], "trade_date": row[5].isoformat() if hasattr(row[5], "isoformat") else str(row[5]), "name": row[6], "prev_close": str(row[7]), "close_price": str(row[8]), "change_pct": str(row[9]), "source": row[10], "fetched_at": row[11].isoformat() if hasattr(row[11], "isoformat") else str(row[11])} for row in rows]
+
+    def save_data_task_status(self, task_name, trade_date, status, success_count, failure_count, error_summary, started_at, finished_at) -> None:
+        self.initialize()
+        self._execute("""INSERT INTO data_sync_status (task_name, trade_date, status, success_count, failure_count, error_summary, started_at, finished_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE trade_date=VALUES(trade_date), status=VALUES(status), success_count=VALUES(success_count), failure_count=VALUES(failure_count), error_summary=VALUES(error_summary), started_at=VALUES(started_at), finished_at=VALUES(finished_at)""", (task_name, str(trade_date), status, int(success_count), int(failure_count), error_summary, _database_datetime(started_at), _database_datetime(finished_at)))
+
+    def load_data_task_status(self, task_name: str | None = None) -> list[dict]:
+        self.initialize()
+        where, params = ("WHERE task_name=%s", (task_name,)) if task_name else ("", ())
+        rows = self._fetchall(f"SELECT task_name, trade_date, status, success_count, failure_count, error_summary, started_at, finished_at FROM data_sync_status {where} ORDER BY task_name", params)
+        return [{"task_name": row[0], "trade_date": row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1]), "status": row[2], "success_count": int(row[3]), "failure_count": int(row[4]), "error_summary": row[5] or "", "started_at": row[6].isoformat() if hasattr(row[6], "isoformat") else str(row[6]), "finished_at": row[7].isoformat() if hasattr(row[7], "isoformat") else str(row[7])} for row in rows]
 
     def save_sector_mapping(self, symbol: str, sector: str, source: str = "manual") -> None:
         self.initialize()
@@ -842,6 +887,12 @@ class MySQLMarketDataStore:
         self.initialize()
         row = self._fetchone("SELECT sector FROM instrument_sector_mapping WHERE symbol=%s", (symbol,))
         return str(row[0]) if row else None
+
+    def load_sector_mappings(self, symbol: str | None = None) -> list[dict]:
+        self.initialize()
+        where, params = ("WHERE symbol=%s", (symbol,)) if symbol else ("", ())
+        rows = self._fetchall(f"SELECT symbol, sector, source, updated_at FROM instrument_sector_mapping {where} ORDER BY symbol", params)
+        return [{"symbol": row[0], "sector": row[1], "source": row[2], "updated_at": row[3].isoformat() if hasattr(row[3], "isoformat") else str(row[3])} for row in rows]
 
     def save_lhb_records(self, rows: list[dict]) -> int:
         if not rows:

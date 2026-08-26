@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, Iterable, List, Optional
 from zoneinfo import ZoneInfo
 
-from ..models import Bar, Quote
+from ..models import Bar, ExternalDailyBar, Quote
 from ..universe import normalize_symbol, validate_hs_symbol
 
 
@@ -28,7 +28,8 @@ ADJUSTS = {"none": "none", "qfq": "forward", "hfq": "backward"}
 _GLOBAL_RATE_LOCK = Lock()
 _GLOBAL_RATE_STATE: dict[str, list[float]] = {}
 RATE_LIMIT_WINDOW_SECONDS = 60.0
-SAFE_MAX_REQUESTS_PER_MINUTE = 8
+SAFE_QUOTE_REQUESTS_PER_MINUTE = 8
+SAFE_KLINE_REQUESTS_PER_MINUTE = 10
 MAX_QUOTE_SYMBOLS_PER_REQUEST = 5
 
 
@@ -139,6 +140,24 @@ def _frame_bars(table: Any, symbol: str, start: str, end: str) -> List[Bar]:
     return bars
 
 
+def _frame_external_daily_bars(table: Any, source_symbol: str, start: str, end: str) -> List[ExternalDailyBar]:
+    start_date = _date(start)
+    end_date = _date(end)
+    bars: List[ExternalDailyBar] = []
+    for record in _records(table):
+        trade_date = _date(_get(record, "trade_date", "trade_date_time", "date", "日期", "时间"))
+        if trade_date is None or (start_date and trade_date < start_date) or (end_date and trade_date > end_date):
+            continue
+        bars.append(
+            ExternalDailyBar(
+                source_symbol=source_symbol,
+                trade_date=datetime.combine(trade_date, datetime.min.time(), tzinfo=timezone.utc),
+                close_price=_required_decimal(record, "close", "close", "收盘", "c"),
+            )
+        )
+    return sorted(bars, key=lambda item: item.trade_date)
+
+
 def _frame_quote(table: Any, symbol: str, fetched_at: datetime, freshness_seconds: int) -> Quote:
     normalized = validate_hs_symbol(symbol)
     records = _records(table)
@@ -219,7 +238,7 @@ class AlphaFeedAdapter:
             ),
         )
         self.quote_max_requests_per_minute = min(
-            SAFE_MAX_REQUESTS_PER_MINUTE,
+            SAFE_QUOTE_REQUESTS_PER_MINUTE,
             max(
                 1,
                 int(
@@ -231,13 +250,13 @@ class AlphaFeedAdapter:
         )
         self.kline_max_symbols_per_request = 1
         self.kline_max_requests_per_minute = min(
-            SAFE_MAX_REQUESTS_PER_MINUTE,
+            SAFE_KLINE_REQUESTS_PER_MINUTE,
             max(
                 1,
                 int(
                     kline_max_requests_per_minute
                     if kline_max_requests_per_minute is not None
-                    else self.options.get("kline_max_requests_per_minute", 8)
+                    else self.options.get("kline_max_requests_per_minute", 10)
                 ),
             ),
         )
@@ -333,6 +352,41 @@ class AlphaFeedAdapter:
     def get_index_bars(self, symbol: str, akshare_symbol: str, start: str = "20240101", end: str = "20500101") -> List[Bar]:
         del akshare_symbol
         return self.get_bars(symbol, "daily", start, end, "none")
+
+    def get_external_daily_bars(
+        self,
+        source_symbol: str,
+        start: str,
+        end: str,
+        *,
+        count: int | None = None,
+    ) -> List[ExternalDailyBar]:
+        clean_symbol = str(source_symbol).strip().upper()
+        if not clean_symbol or clean_symbol.endswith((".SH", ".SZ")):
+            raise AlphaFeedError(f"海外日 K 代码无效：{source_symbol}")
+        client = self._client()
+        try:
+            self._throttle("daily_kline", self.kline_max_requests_per_minute)
+            table = client.klines.get(
+                clean_symbol,
+                period="1d",
+                count=int(count or self.history_count),
+                start_time=_date_timestamp(start),
+                end_time=_date_timestamp(end, end_of_day=True),
+                adjust="none",
+                to_dataframe=True,
+            )
+            bars = _frame_external_daily_bars(table, clean_symbol, start, end)
+            if not bars:
+                raise AlphaFeedError(f"AlphaFeed 海外日 K 缺少标的：{clean_symbol}")
+        except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, AlphaFeedError):
+                raise
+            if _is_rate_limit_error(exc):
+                raise AlphaFeedRateLimitError(f"AlphaFeed 海外日 K 触发调用频率限制：{exc}") from exc
+            raise AlphaFeedError(f"AlphaFeed 海外日 K 请求失败：{exc}") from exc
+        self.last_source = "alphafeed"
+        return bars
 
     def _throttle(self, endpoint: str, max_requests_per_minute: int) -> None:
         interval = max(self.min_request_interval_seconds, RATE_LIMIT_WINDOW_SECONDS / max_requests_per_minute)

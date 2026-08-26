@@ -272,6 +272,38 @@ export interface StrategiesPayload {
   saved_profile_id?: string;
 }
 
+export interface StrategyReadinessRow {
+  strategy_id: string;
+  name_zh: string;
+  name_en: string;
+  status: 'READY' | 'UNAVAILABLE' | 'INVALID' | 'NEUTRAL' | 'DEGRADED' | string;
+  reason?: string;
+  configured_weight?: JsonDecimal;
+  normalized_weight?: JsonDecimal;
+  source?: string;
+  last_success_at?: string | null;
+  trade_allowed?: boolean;
+}
+
+export interface StrategyReadinessPayload {
+  symbol: string;
+  name?: string;
+  trading_enabled?: boolean | number;
+  quote?: { status?: string; reason?: string };
+  daily_bars?: { status?: string; points?: number };
+  sector?: { value?: string; defaulted?: boolean; status?: string; source?: string };
+  strategies?: StrategyReadinessRow[];
+  tasks?: Array<{
+    task_name: string;
+    trade_date: string;
+    status: string;
+    success_count?: number;
+    failure_count?: number;
+    error_summary?: string;
+    finished_at?: string;
+  }>;
+}
+
 export interface DailyReportSummary {
   report_date: string;
   status: string;

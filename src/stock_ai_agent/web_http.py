@@ -24,21 +24,27 @@ from .web_actions import (
     remove_dashboard_watchlist_item,
     save_dashboard_strategy_profile,
     save_dashboard_risk_config,
+    sync_dashboard_sectors,
     run_dashboard_backtest,
     set_dashboard_watchlist_trading,
     search_watchlist_instruments,
 )
-from .web_assets import render_dashboard_html, render_spa_index, resolve_spa_file
+from .web_assets import render_spa_index, resolve_spa_file
 from .web_dashboard import (
     build_dashboard_backtests_payload,
     build_dashboard_orders_payload,
     build_dashboard_calendar_payload,
+    build_dashboard_data_health_payload,
+    build_dashboard_lhb_raw_payload,
+    build_dashboard_lhb_records_payload,
     build_dashboard_overview_payload,
     build_dashboard_payload,
     build_dashboard_performance_payload,
     build_dashboard_report_payload,
     build_dashboard_reports_payload,
     build_dashboard_strategies_payload,
+    build_dashboard_sectors_payload,
+    build_strategy_readiness_payload,
     _query_date,
 )
 from .web_health import build_ready_payload
@@ -169,7 +175,15 @@ def _build_dashboard_handler(config: AppConfig, store):
                 _send(self, "text/html; charset=utf-8", html.encode("utf-8"))
                 return
             if request.path == "/":
-                _send(self, "text/html; charset=utf-8", render_dashboard_html().encode("utf-8"))
+                try:
+                    render_spa_index()
+                except FileNotFoundError:
+                    _send_error(self, 503, "SPA 尚未构建。请部署包含 React 构建产物的镜像。")
+                else:
+                    self.send_response(302)
+                    self.send_header("Location", "/app/")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
                 return
             if request.path == "/api/dashboard/overview":
                 payload = build_dashboard_overview_payload(config, store)
@@ -199,11 +213,51 @@ def _build_dashboard_handler(config: AppConfig, store):
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             if request.path == "/api/dashboard/orders":
+                logger.warning("访问已进入弃用观察期的接口：/api/dashboard/orders")
                 payload = build_dashboard_orders_payload(store)
-                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"), extra_headers={"Deprecation": "true"})
                 return
             if request.path == "/api/dashboard/strategies":
                 payload = build_dashboard_strategies_payload(config, store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/data-health":
+                payload = build_dashboard_data_health_payload(config, store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/sectors":
+                symbol = parse_qs(request.query).get("symbol", [""])[0].strip().upper() or None
+                payload = build_dashboard_sectors_payload(store, symbol)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/lhb/records":
+                values = parse_qs(request.query)
+                raw_date = values.get("date", [""])[0].strip()
+                try:
+                    record_date = date.fromisoformat(raw_date) if raw_date else None
+                except ValueError:
+                    _send_error(self, 400, "龙虎榜日期必须使用 YYYY-MM-DD 格式。")
+                    return
+                symbol = values.get("symbol", [""])[0].strip().upper() or None
+                payload = build_dashboard_lhb_records_payload(store, record_date, symbol)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            lhb_raw_prefix = "/api/lhb/records/"
+            if request.path.startswith(lhb_raw_prefix) and request.path.endswith("/raw"):
+                try:
+                    payload = build_dashboard_lhb_raw_payload(store, unquote(request.path[len(lhb_raw_prefix):-len("/raw")]))
+                except ValueError as exc:
+                    _send_error(self, 404, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/strategy-readiness":
+                symbol = parse_qs(request.query).get("symbol", [""])[0].strip().upper()
+                try:
+                    payload = build_strategy_readiness_payload(config, store, symbol)
+                except ValueError as exc:
+                    _send_error(self, 400, str(exc))
+                    return
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             instrument_prefix = "/api/instruments/"
@@ -242,6 +296,7 @@ def _build_dashboard_handler(config: AppConfig, store):
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             if request.path == "/api/dashboard":
+                logger.warning("访问已进入弃用观察期的聚合接口：/api/dashboard")
                 try:
                     query = parse_qs(request.query)
                     payload_data = build_dashboard_payload(
@@ -255,7 +310,7 @@ def _build_dashboard_handler(config: AppConfig, store):
                     _send_error(self, 400, "请求参数无效。")
                     return
                 payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
-                _send(self, "application/json; charset=utf-8", payload)
+                _send(self, "application/json; charset=utf-8", payload, extra_headers={"Deprecation": "true"})
                 return
             if request.path == "/api/watchlist/search":
                 query = parse_qs(request.query).get("q", [""])[0]
@@ -307,6 +362,16 @@ def _build_dashboard_handler(config: AppConfig, store):
                     return
                 try:
                     payload = save_dashboard_risk_config(config, store, data)
+                except (TypeError, ValueError) as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/sectors/sync":
+                values = parse_qs(request.query)
+                symbol = values.get("symbol", [""])[0].strip().upper() or None
+                try:
+                    payload = sync_dashboard_sectors(config, store, symbol)
                 except (TypeError, ValueError) as exc:
                     _send_error(self, 400, str(exc))
                     return

@@ -19,7 +19,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.data.providers["alphafeed"]["quote_max_symbols_per_request"], 5)
         self.assertEqual(config.data.providers["alphafeed"]["quote_max_requests_per_minute"], 8)
         self.assertEqual(config.data.providers["alphafeed"]["kline_max_symbols_per_request"], 1)
-        self.assertEqual(config.data.providers["alphafeed"]["kline_max_requests_per_minute"], 8)
+        self.assertEqual(config.data.providers["alphafeed"]["kline_max_requests_per_minute"], 10)
         self.assertEqual(config.data.history["retry_attempts"], 1)
         self.assertEqual(config.data.providers["akshare"]["fund_spot_function"], "fund_etf_spot_em")
         self.assertEqual(config.storage.driver, "mock")

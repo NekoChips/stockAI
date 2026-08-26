@@ -7,7 +7,7 @@
 .cursor/
 .gemini/
 .skills/
-design-system/
+/design-system/
 
 # AI planning, review, and workflow artifacts
 /design.md
@@ -43,11 +43,15 @@ config/*.local.yaml
 config/*.secret.yaml
 docker/.env.release
 dist/
+build/
+*.egg-info/
+*.tsbuildinfo
 
 src/stock_ai_agent/spa/**
 !src/stock_ai_agent/spa/.gitkeep
 frontend/node_modules/
 frontend/dist/
+.pnpm-store/
 
 .worktrees/
 .superpowers/

@@ -1,6 +1,6 @@
 # SPA Feature Parity Checklist
 
-Manual verification gate before cutover from legacy dashboard (`/`) to the React SPA (`/app`). See [2026-08-25-react-antd-spa-design.md](./specs/2026-08-25-react-antd-spa-design.md).
+Manual verification gate before cutover from legacy dashboard (`/`) to the React SPA (`/app`). See [2026-08-25-react-antd-spa-design.md](../specs/2026-08-25-react-antd-spa-design.md).
 
 ## How to run Vite + Python
 
@@ -35,14 +35,17 @@ Basic Auth applies to both entries when configured.
 3. Confirm writes (save, confirm, run, toggle) persist and appear on refresh.
 4. Check header refresh, error notices, and Basic Auth on the SPA.
 
+
+
 ## Checklist (cutover gate)
 
 Manual verification on `/app` must cover:
 
-- [ ] äº¤æ˜“çœ‹æ¿: account strip, risk config save/confirm, performance chart + range, decision timeline, positions, profit calendar, leaderboard, recent fills
-- [ ] è§‚å¯Ÿæ± : search/add drawer, remove, trading toggle
-- [ ] å›æµ‹è®°å½•: list, run, multi-select confirm
-- [ ] ç­–ç•¥ä¸­å¿ƒ: profile list/edit/save/confirm/discard draft
-- [ ] æ—¥æŠ¥å½’æ¡£: paginated list + detail
-- [ ] æ ‡çš„è¯¦æƒ…: periods, canvas chart, markers
-- [ ] Header refresh + error notice + Basic Auth still works
+- [x] äº¤æ˜“çœ‹æ¿: account strip, risk config save/confirm, performance chart + range, decision timeline, positions, profit calendar, leaderboard, recent fills
+- [x] è§‚å¯Ÿæ± : search/add drawer, remove, trading toggle
+- [x] å›æµ‹è®°å½•: list, run, multi-select confirm
+- [x] ç­–ç•¥ä¸­å¿ƒ: profile list/edit/save/confirm/discard draft
+- [x] æ—¥æŠ¥å½’æ¡£: paginated list + detail
+- [x] æ ‡çš„è¯¦æƒ…: periods, canvas chart, markers
+- [x] Header refresh + error notice + Basic Auth still works- [ ] Ö÷Ìâ£ºÁÁ/°µÇĞ»»¡¢Ë¢ĞÂºó±£Áô
+- [ ] °µÉ«£º¿´°å / ±êµÄÏêÇé / ²ßÂÔÖĞĞÄ / ÈÕ±¨¹éµµÎŞÎ´ÊÊÅä°×µ×

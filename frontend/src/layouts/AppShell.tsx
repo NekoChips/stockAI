@@ -1,8 +1,9 @@
-import { Layout, Menu, Button, Alert, Typography, Space } from 'antd';
+import { Layout, Menu, Button, Alert, Typography } from 'antd';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { ReloadOutlined } from '@ant-design/icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUiStore } from '@/stores/uiStore';
+import { invalidateDashboardQueries } from '@/components/dashboard/DashboardRefreshControls';
+import { ThemeToggle } from '@/components/theme/ThemeToggle';
 
 const { Header, Content } = Layout;
 
@@ -12,6 +13,36 @@ const items = [
   { key: '/strategies', label: '策略中心' },
   { key: '/reports', label: '日报归档' },
 ];
+
+function retryCurrentRoute(
+  pathname: string,
+  queryClient: ReturnType<typeof useQueryClient>,
+) {
+  if (pathname === '/' || pathname === '') {
+    invalidateDashboardQueries(queryClient);
+    return;
+  }
+  if (pathname.startsWith('/strategies')) {
+    void queryClient.invalidateQueries({ queryKey: ['strategies'] });
+    void queryClient.invalidateQueries({ queryKey: ['strategy-readiness'] });
+    void queryClient.invalidateQueries({ queryKey: ['overview'] });
+    return;
+  }
+  if (pathname.startsWith('/backtests')) {
+    void queryClient.invalidateQueries({ queryKey: ['backtests'] });
+    return;
+  }
+  if (pathname.startsWith('/reports')) {
+    void queryClient.invalidateQueries({ queryKey: ['reports'] });
+    void queryClient.invalidateQueries({ queryKey: ['report'] });
+    return;
+  }
+  if (pathname.startsWith('/instruments/')) {
+    void queryClient.invalidateQueries({ queryKey: ['instrument'] });
+    return;
+  }
+  void queryClient.invalidateQueries();
+}
 
 export function AppShell() {
   const navigate = useNavigate();
@@ -26,39 +57,22 @@ export function AppShell() {
     )?.key ?? '/';
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          background: '#fff',
-          paddingInline: 24,
-        }}
-      >
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          StockAI
+    <Layout className="app-shell" style={{ minHeight: '100vh' }}>
+      <Header className="app-shell-header">
+        <Typography.Title level={4} className="app-brand" style={{ margin: 0 }}>
+          Stock<span>AI</span>
         </Typography.Title>
         <Menu
           mode="horizontal"
           selectedKeys={[selected]}
           items={items}
           onClick={({ key }) => navigate(key)}
+          className="app-shell-menu"
           style={{ flex: 1, minWidth: 0 }}
         />
-        <Space>
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => {
-              setNotice('');
-              void queryClient.invalidateQueries();
-            }}
-          >
-            刷新数据
-          </Button>
-        </Space>
+        <ThemeToggle />
       </Header>
-      <Content style={{ padding: 24 }}>
+      <Content className="app-shell-content">
         {notice ? (
           <Alert
             type="error"
@@ -66,7 +80,13 @@ export function AppShell() {
             style={{ marginBottom: 16 }}
             message={notice}
             action={
-              <Button size="small" onClick={() => void queryClient.invalidateQueries()}>
+              <Button
+                size="small"
+                onClick={() => {
+                  setNotice('');
+                  retryCurrentRoute(location.pathname, queryClient);
+                }}
+              >
                 重试
               </Button>
             }

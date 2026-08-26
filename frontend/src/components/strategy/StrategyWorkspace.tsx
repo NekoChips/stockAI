@@ -20,14 +20,17 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { ReloadOutlined, SaveOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
   confirmStrategyProfile,
   discardStrategyDraft,
   fetchStrategies,
+  fetchStrategyReadiness,
   saveStrategyProfile,
 } from '@/api/strategies';
+import { fetchOverview } from '@/api/dashboard';
+import { StrategyReadinessPanel } from './StrategyReadinessPanel';
 import { useUiStore } from '@/stores/uiStore';
 import type {
   ProfileDiffEntry,
@@ -35,6 +38,23 @@ import type {
   StrategyDefinition,
   StrategyProfile,
 } from '@/types/dashboard';
+
+/** Mirror legacy `newStrategyProfile()`: local draft cloned from default. */
+export function createNewStrategyDraft(profiles: StrategyProfile[]): StrategyProfile {
+  const base = profiles.find((item) => item.profile_id === 'default') ?? ({} as StrategyProfile);
+  return {
+    ...base,
+    profile_id: '',
+    name_zh: '新策略组合',
+    name_en: 'New Strategy Profile',
+    scope_type: 'symbol',
+    scope_value: '',
+    status: 'draft',
+    revision: 0,
+    draft_diff: [],
+    pending_activation: false,
+  };
+}
 
 function scopeLabel(profile: StrategyProfile): string {
   if (profile.scope_type === 'default') return '默认组合';
@@ -98,7 +118,7 @@ function parseJsonField(value: string, label: string): Record<string, unknown> {
 function DraftDiff({ diff }: { diff: ProfileDiffEntry[] }) {
   if (!diff.length) return null;
   return (
-    <div style={{ marginTop: 16, padding: 12, background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 6 }}>
+    <div className="strategy-draft-banner">
       <Typography.Text strong>待确认变更</Typography.Text>
       <ul style={{ margin: '8px 0 0', padding: 0, listStyle: 'none' }}>
         {diff.map((item) => (
@@ -135,15 +155,14 @@ function StrategyMembers({
       {members.map((item) => (
         <Col xs={24} md={8} key={item.strategy_id}>
           <div
+            className={`strategy-toggle-row${enabled.includes(item.strategy_id) ? ' is-on' : ''}`}
             style={{
               display: 'grid',
               gridTemplateColumns: 'auto 1fr 72px',
               alignItems: 'center',
               gap: 7,
               padding: 9,
-              border: '1px solid #d9d9d9',
               borderRadius: 5,
-              background: enabled.includes(item.strategy_id) ? '#f8fbff' : '#fff',
             }}
           >
             <Checkbox
@@ -177,6 +196,8 @@ function StrategyMembers({
 
 export function StrategyWorkspace() {
   const [selectedProfileId, setSelectedProfileId] = useState('default');
+  const [localProfiles, setLocalProfiles] = useState<StrategyProfile[] | null>(null);
+  const [readinessSymbol, setReadinessSymbol] = useState('');
   const [form] = Form.useForm<ProfileFormValues>();
   const enabledIds = Form.useWatch('enabled', form) ?? [];
   const queryClient = useQueryClient();
@@ -187,8 +208,22 @@ export function StrategyWorkspace() {
     queryFn: ({ signal }) => fetchStrategies(signal),
   });
 
+  const { data: overview } = useQuery({
+    queryKey: ['overview'],
+    queryFn: ({ signal }) => fetchOverview(signal),
+    staleTime: 30_000,
+  });
+  const watchlist = overview?.watchlist ?? [];
+  const readinessQuery = useQuery({
+    queryKey: ['strategy-readiness', readinessSymbol],
+    queryFn: ({ signal }) => fetchStrategyReadiness(readinessSymbol, signal),
+    enabled: Boolean(readinessSymbol),
+    staleTime: 30_000,
+  });
+
   const center = data?.strategies;
-  const profiles = center?.profiles ?? [];
+  const serverProfiles = center?.profiles ?? [];
+  const profiles = localProfiles ?? serverProfiles;
   const definitions = center?.definitions ?? [];
   const changes = center?.changes ?? [];
 
@@ -198,10 +233,11 @@ export function StrategyWorkspace() {
   );
 
   useEffect(() => {
-    if (profiles.length && !profiles.some((item) => item.profile_id === selectedProfileId)) {
-      setSelectedProfileId(profiles[0]?.profile_id ?? 'default');
+    if (localProfiles) return;
+    if (serverProfiles.length && !serverProfiles.some((item) => item.profile_id === selectedProfileId)) {
+      setSelectedProfileId(serverProfiles[0]?.profile_id ?? 'default');
     }
-  }, [profiles, selectedProfileId]);
+  }, [serverProfiles, selectedProfileId, localProfiles]);
 
   useEffect(() => {
     if (profile) {
@@ -209,8 +245,17 @@ export function StrategyWorkspace() {
     }
   }, [profile, form]);
 
+  useEffect(() => {
+    if (watchlist.length && !watchlist.some((item) => item.symbol === readinessSymbol)) {
+      setReadinessSymbol(watchlist[0].symbol);
+    }
+  }, [readinessSymbol, watchlist]);
+
   const invalidate = () => {
+    setLocalProfiles(null);
     void queryClient.invalidateQueries({ queryKey: ['strategies'] });
+    void queryClient.invalidateQueries({ queryKey: ['strategy-readiness'] });
+    void queryClient.invalidateQueries({ queryKey: ['overview'] });
   };
 
   const saveMutation = useMutation({
@@ -247,6 +292,17 @@ export function StrategyWorkspace() {
     },
   });
 
+  const handleNewProfile = () => {
+    const draft = createNewStrategyDraft(serverProfiles);
+    setLocalProfiles([draft]);
+    setSelectedProfileId('');
+  };
+
+  const handleRefresh = () => {
+    setLocalProfiles(null);
+    void refetch();
+  };
+
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
@@ -273,7 +329,8 @@ export function StrategyWorkspace() {
     }
   };
 
-  const activeCount = profiles.filter((item) => item.status === 'active').length;
+  const activeCount = serverProfiles.filter((item) => item.status === 'active').length;
+  const canActOnProfile = Boolean(profile?.profile_id) && profile != null && canConfirmOrDiscard(profile);
 
   const changeColumns: ColumnsType<StrategyChange> = [
     { title: '组合', dataIndex: 'profile_id', key: 'profile_id' },
@@ -294,13 +351,24 @@ export function StrategyWorkspace() {
         </Typography.Text>
         <Space>
           <Tag>{activeCount} 个生效组合</Tag>
-          <Button icon={<ReloadOutlined />} loading={isFetching} onClick={() => void refetch()}>
+          <Button icon={<ReloadOutlined />} loading={isFetching} onClick={handleRefresh}>
             刷新策略
           </Button>
         </Space>
       </div>
 
-      <Row gutter={[1, 16]} style={{ background: '#edf1f6' }}>
+      <div style={{ marginBottom: 16 }}>
+        <StrategyReadinessPanel
+          watchlist={watchlist}
+          selectedSymbol={readinessSymbol || watchlist[0]?.symbol}
+          onSymbolChange={setReadinessSymbol}
+          data={readinessQuery.data}
+          loading={readinessQuery.isLoading || readinessQuery.isFetching}
+          error={readinessQuery.error instanceof Error ? readinessQuery.error : null}
+        />
+      </div>
+
+      <Row gutter={[1, 16]} className="strategy-list-shell">
         <Col xs={24} lg={7}>
           <Card
             size="small"
@@ -308,23 +376,27 @@ export function StrategyWorkspace() {
             extra={<Tag>{profiles.length} 个</Tag>}
             styles={{ body: { padding: '12px 8px' } }}
           >
-            <Typography.Paragraph type="secondary" style={{ margin: '0 0 12px', fontSize: 12 }}>
-              选择组合查看和编辑
-            </Typography.Paragraph>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
+              <Typography.Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
+                选择组合查看和编辑
+              </Typography.Paragraph>
+              <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={handleNewProfile}>
+                新建组合
+              </Button>
+            </div>
             {profiles.length ? (
               <List
                 dataSource={profiles}
                 renderItem={(item) => {
-                  const selected = item.profile_id === (profile?.profile_id ?? '');
+                  const selected = item.profile_id === (profile?.profile_id ?? selectedProfileId);
                   const draft = hasDraft(item);
                   return (
                     <List.Item
+                      className={`strategy-list-item${selected ? ' is-selected' : ''}`}
                       style={{
                         padding: '8px 10px',
                         marginBottom: 4,
-                        border: selected ? '1px solid #9fc2f4' : '1px solid transparent',
                         borderRadius: 6,
-                        background: selected ? '#f0f7ff' : 'transparent',
                         cursor: 'pointer',
                       }}
                       onClick={() => setSelectedProfileId(item.profile_id)}
@@ -344,10 +416,10 @@ export function StrategyWorkspace() {
                             text={statusLabel(item)}
                           />
                         </div>
-                        <Space size={8} style={{ marginTop: 6, fontSize: 10, color: '#8c8c8c' }}>
+                        <Space size={8} className="strategy-meta" style={{ marginTop: 6, fontSize: 10 }}>
                           <span>{(item.enabled ?? []).length} 项策略</span>
                           <span>Revision {item.revision ?? '--'}</span>
-                          {draft ? <span style={{ color: '#faad14', fontWeight: 700 }}>有草稿</span> : null}
+                          {draft ? <span className="strategy-draft-flag">有草稿</span> : null}
                         </Space>
                       </div>
                     </List.Item>
@@ -382,7 +454,7 @@ export function StrategyWorkspace() {
                     />
                     <Button
                       size="small"
-                      disabled={!canConfirmOrDiscard(profile) || discardMutation.isPending}
+                      disabled={!canActOnProfile || discardMutation.isPending}
                       loading={discardMutation.isPending}
                       onClick={() => discardMutation.mutate(profile.profile_id)}
                     >
@@ -390,7 +462,7 @@ export function StrategyWorkspace() {
                     </Button>
                     <Button
                       size="small"
-                      disabled={!canConfirmOrDiscard(profile) || confirmMutation.isPending}
+                      disabled={!canActOnProfile || confirmMutation.isPending}
                       loading={confirmMutation.isPending}
                       onClick={() => confirmMutation.mutate(profile.profile_id)}
                     >
@@ -399,14 +471,14 @@ export function StrategyWorkspace() {
                   </Space>
                 </div>
 
-                <Row gutter={[1, 1]} style={{ marginTop: 18, border: '1px solid #edf1f6', borderRadius: 6, overflow: 'hidden' }}>
+                <Row gutter={[1, 1]} className="strategy-metric-shell">
                   {[
                     { label: '当前状态', value: statusLabel(profile) },
                     { label: '启用策略', value: `${(profile.enabled ?? []).length} 项` },
                     { label: '配置版本', value: `Revision ${profile.revision ?? '--'}` },
                   ].map((item) => (
                     <Col xs={8} key={item.label}>
-                      <div style={{ padding: '11px 12px', background: '#fbfdff' }}>
+                      <div className="strategy-metric-cell">
                         <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                           {item.label}
                         </Typography.Text>
@@ -426,7 +498,7 @@ export function StrategyWorkspace() {
                   <Row gutter={10}>
                     <Col xs={24} md={8}>
                       <Form.Item name="profile_id" label="组合 ID（系统生成）">
-                        <Input readOnly={Boolean(profile.profile_id)} />
+                        <Input readOnly={!profile.profile_id} />
                       </Form.Item>
                     </Col>
                     <Col xs={24} md={8}>

@@ -1,4 +1,5 @@
 import type { PerformancePayload } from '@/types/dashboard';
+import { chartPalette, cssVar } from '@/theme/cssVars';
 import { fmtMoney, fmtPct } from '@/utils/format';
 
 export type ChartMode = 'pnl' | 'return' | 'asset';
@@ -22,7 +23,7 @@ export interface ChartState {
 }
 
 export const SERIES_STYLE: SeriesStyle[] = [
-  { color: '#1769e0', dash: [], label: 'AI-Agent' },
+  { color: '#0F766E', dash: [], label: 'AI-Agent' },
   { color: '#a9640f', dash: [7, 4], label: 'AI-Agent' },
   { color: '#7b61a8', dash: [3, 3], label: 'AI-Agent' },
   { color: '#187a65', dash: [10, 4], label: 'AI-Agent' },
@@ -35,7 +36,11 @@ export function chartLabel(value: number, chartMode: ChartMode): string {
 }
 
 export function seriesMeta(name: string, index: number): SeriesStyle & { label: string } {
-  return { ...SERIES_STYLE[index % SERIES_STYLE.length], label: name };
+  const base = { ...SERIES_STYLE[index % SERIES_STYLE.length], label: name };
+  if (name === 'AI-Agent') {
+    return { ...base, color: cssVar('--brand', base.color) };
+  }
+  return base;
 }
 
 export function buildChartPoints(data: PerformancePayload, chartMode: ChartMode): ChartPoint[] {
@@ -119,10 +124,11 @@ export function drawLineChart(
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
+  const palette = chartPalette();
   const points = state?.points ?? [];
   const days = state?.days ?? [];
   if (!points.length || !days.length) {
-    ctx.fillStyle = '#667085';
+    ctx.fillStyle = palette.subtle;
     ctx.font = '14px Fira Sans, sans-serif';
     ctx.fillText('暂无收益数据', 24, 38);
     return;
@@ -147,8 +153,8 @@ export function drawLineChart(
 
   ctx.font = '11px Fira Sans, sans-serif';
   ctx.lineWidth = 1;
-  ctx.strokeStyle = '#e6edf6';
-  ctx.fillStyle = '#667085';
+  ctx.strokeStyle = palette.line;
+  ctx.fillStyle = palette.subtle;
 
   for (let index = 0; index < 5; index++) {
     const y = top + (graphH * index) / 4;
@@ -168,7 +174,7 @@ export function drawLineChart(
     const meta = seriesMeta(name, allSeriesNames.indexOf(name));
     const rows = points.filter((item) => item.series === name);
     ctx.beginPath();
-    ctx.strokeStyle = meta.color;
+    ctx.strokeStyle = name === 'AI-Agent' ? palette.brand : meta.color;
     ctx.lineWidth = name === 'AI-Agent' ? 3 : 1.7;
     ctx.setLineDash(meta.dash);
     rows.forEach((item, rowIndex) => {
@@ -184,7 +190,7 @@ export function drawLineChart(
 
   if (focusIndex >= 0 && days.length) {
     const x = left + (days.length === 1 ? 0 : (focusIndex * graphW) / (days.length - 1));
-    ctx.strokeStyle = '#8aa6ca';
+    ctx.strokeStyle = palette.crosshair;
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();

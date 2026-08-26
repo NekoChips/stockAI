@@ -21,9 +21,11 @@ StockAI 是面向沪深 A 股股票与 ETF 的模拟盘 AI-Agent。它使用公�
 
 Web 层按职责拆分为数据组装、写操作、健康检查、HTTP 路由、静态资源和公共响应工具模块；`stock_ai_agent.web` 保留为兼容导入入口。
 
-## Web UI（双入口）
+## Web UI
 
-Web 看板目前提供两个入口：`/` 为 legacy 单页 HTML，`/app` 为 React + Ant Design SPA（开发中，切主入口前需完成 parity 验收）。本地 SPA 热更新：`cd frontend && npm run dev`（Vite :5173，API 代理至 Python :8765）；生产或联调可先 `npm run build` 后由 Python 在 `/app` 提供静态资源。验收清单见 [docs/superpowers/parity-checklist.md](./docs/superpowers/parity-checklist.md)。
+Web 看板只提供 React + Ant Design SPA，根路径会跳转到 `/app/`，不再保留 legacy HTML 入口。策略、回测、观察池、风险配置、日报和标的详情均在页面完成；行情同步、收盘日报和自动回测由 monitor 按调度自动执行。本地 SPA 热更新：`cd frontend && npm run dev`（Vite :5173，API 代理至 Python :8765）；生产镜像在构建阶段生成 `/app` 静态资源。
+
+应用的 Python 模块仅保留 `monitor` 和 `web` 两个容器启动模式，`sync-*`、`run-once`、`post-close` 和 `optimize-strategy` 等手工 CLI 业务命令已移除，避免形成第二套操作入口。
 
 ## v0.1.3 数据结构升级
 

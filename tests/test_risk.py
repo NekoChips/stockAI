@@ -88,6 +88,18 @@ class RiskTests(unittest.TestCase):
         self.assertEqual(result.order.direction, Direction.REDUCE)
         self.assertEqual(result.decision.target_weight, Decimal("0.30"))
 
+    def test_disabled_instrument_rejects_buy_at_risk_boundary(self):
+        config = load_config()
+        engine = RiskEngine(
+            config.risk,
+            Universe.from_config([InstrumentConfig("588170.SH", "etf", "测试 ETF", trading_enabled=False)]),
+        )
+
+        result = engine.evaluate(signal(Direction.BUY), Portfolio(Decimal("1000000")), quote())
+
+        self.assertFalse(result.decision.approved)
+        self.assertIn("未启用交易", result.decision.reasons[0])
+
 
 if __name__ == "__main__":
     unittest.main()
