@@ -11,6 +11,7 @@ from binascii import Error as Base64Error
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import AppConfig
@@ -33,6 +34,7 @@ from .web_assets import render_spa_index, resolve_spa_file
 from .web_dashboard import (
     build_dashboard_backtests_payload,
     build_dashboard_orders_payload,
+    build_dashboard_decision_events_payload,
     build_dashboard_calendar_payload,
     build_dashboard_data_health_payload,
     build_dashboard_lhb_raw_payload,
@@ -53,6 +55,38 @@ from .web_support import MAX_BODY_SIZE, _send, _send_error, _to_jsonable
 
 logger = logging.getLogger(__name__)
 PLACEHOLDER_PATTERN = re.compile(r"^\$\{[A-Z0-9_]+\}$")
+
+
+def _spa_content_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".html":
+        return "text/html; charset=utf-8"
+    if suffix == ".js":
+        return "application/javascript; charset=utf-8"
+    if suffix == ".css":
+        return "text/css; charset=utf-8"
+    if suffix == ".svg":
+        return "image/svg+xml"
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return f"image/{suffix.lstrip('.')}"
+    if suffix == ".json":
+        return "application/json; charset=utf-8"
+    if suffix == ".woff2":
+        return "font/woff2"
+    return "application/octet-stream"
+
+
+def _legacy_app_redirect_target(path: str, query: str) -> str:
+    """Map /app and /app/* to root SPA paths for old bookmarks."""
+    if path == "/app" or path == "/app/":
+        target = "/"
+    else:
+        target = path[len("/app") :] or "/"
+        if not target.startswith("/"):
+            target = "/" + target
+    if query:
+        target = f"{target}?{query}"
+    return target
 
 
 class BoundedThreadingHTTPServer(HTTPServer):
@@ -146,47 +180,21 @@ def _build_dashboard_handler(config: AppConfig, store):
                 return
             if not self._require_authorization():
                 return
-            if request.path == "/app" or request.path.startswith("/app/"):
-                asset = resolve_spa_file(request.path)
-                if asset is not None:
-                    content_type = "application/octet-stream"
-                    suffix = asset.suffix.lower()
-                    if suffix == ".html":
-                        content_type = "text/html; charset=utf-8"
-                    elif suffix == ".js":
-                        content_type = "application/javascript; charset=utf-8"
-                    elif suffix == ".css":
-                        content_type = "text/css; charset=utf-8"
-                    elif suffix == ".svg":
-                        content_type = "image/svg+xml"
-                    elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
-                        content_type = f"image/{suffix.lstrip('.')}"
-                    elif suffix == ".json":
-                        content_type = "application/json; charset=utf-8"
-                    elif suffix == ".woff2":
-                        content_type = "font/woff2"
-                    _send(self, content_type, asset.read_bytes())
-                    return
-                try:
-                    html = render_spa_index()
-                except FileNotFoundError:
-                    _send_error(self, 503, "SPA 尚未构建。请在 frontend/ 执行 npm run build，或使用包含前端构建阶段的 Docker 镜像。")
-                    return
-                _send(self, "text/html; charset=utf-8", html.encode("utf-8"))
-                return
-            if request.path == "/":
-                try:
-                    render_spa_index()
-                except FileNotFoundError:
-                    _send_error(self, 503, "SPA 尚未构建。请部署包含 React 构建产物的镜像。")
-                else:
-                    self.send_response(302)
-                    self.send_header("Location", "/app/")
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                return
             if request.path == "/api/dashboard/overview":
                 payload = build_dashboard_overview_payload(config, store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard/decision-events":
+                try:
+                    query = parse_qs(request.query)
+                    as_of = _query_date(query, "date")
+                    raw_limit = query.get("limit", ["100"])[0]
+                    limit = int(raw_limit)
+                except ValueError as exc:
+                    logger.warning("决策流参数无效：%s", exc)
+                    _send_error(self, 400, "请求参数无效。")
+                    return
+                payload = build_dashboard_decision_events_payload(store, as_of=as_of, limit=limit)
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             if request.path == "/api/dashboard/performance":
@@ -319,7 +327,26 @@ def _build_dashboard_handler(config: AppConfig, store):
                 payload = {"items": results, "catalog": status}
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
-            self.send_error(404, "Not Found")
+            if request.path.startswith("/api/"):
+                self.send_error(404, "Not Found")
+                return
+            if request.path == "/app" or request.path.startswith("/app/"):
+                target = _legacy_app_redirect_target(request.path, request.query)
+                self.send_response(302)
+                self.send_header("Location", target)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            asset = resolve_spa_file(request.path)
+            if asset is not None:
+                _send(self, _spa_content_type(asset), asset.read_bytes())
+                return
+            try:
+                html = render_spa_index()
+            except FileNotFoundError:
+                _send_error(self, 503, "SPA 尚未构建。请在 frontend/ 执行 npm run build，或使用包含前端构建阶段的 Docker 镜像。")
+                return
+            _send(self, "text/html; charset=utf-8", html.encode("utf-8"))
 
         def do_POST(self) -> None:
             if not self._require_authorization():

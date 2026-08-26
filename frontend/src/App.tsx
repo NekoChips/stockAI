@@ -15,7 +15,7 @@ function PageFallback() {
 
 export default function App() {
   return (
-    <BrowserRouter basename="/app">
+    <BrowserRouter>
       <Routes>
         <Route element={<AppShell />}>
           <Route
