@@ -22,33 +22,38 @@ def sma(values: Iterable[Decimal], period: int) -> Optional[Decimal]:
 
 
 def ema(values: Iterable[Decimal], period: int) -> Optional[Decimal]:
-    items = list(values)
-    if len(items) < period:
-        return None
+    series = _ema_series(list(values), period)
+    return series[-1] if series else None
+
+
+def _ema_series(values: List[Decimal], period: int) -> List[Decimal]:
+    """Return the EMA at each point where a full seed window is available."""
+    if period <= 0 or len(values) < period:
+        return []
     multiplier = Decimal("2") / Decimal(period + 1)
-    result = sum(items[:period], Decimal("0")) / Decimal(period)
-    for value in items[period:]:
+    result = sum(values[:period], Decimal("0")) / Decimal(period)
+    series = [result]
+    for value in values[period:]:
         result = (value - result) * multiplier + result
-    return result
+        series.append(result)
+    return series
 
 
 def macd(values: Iterable[Decimal]) -> Optional[dict]:
     items = list(values)
     if len(items) < 35:
         return None
-    macd_line_series: List[Decimal] = []
-    for index in range(26, len(items) + 1):
-        subset = items[:index]
-        fast = ema(subset, 12)
-        slow = ema(subset, 26)
-        if fast is not None and slow is not None:
-            macd_line_series.append(fast - slow)
-    signal = ema(macd_line_series, 9)
-    if signal is None:
+    fast_series = _ema_series(items, 12)
+    slow_series = _ema_series(items, 26)
+    # The fast EMA starts 14 points before the slow EMA, so align both at
+    # the first position where a 26-period EMA exists.
+    macd_line_series = [fast - slow for fast, slow in zip(fast_series[14:], slow_series)]
+    signal_series = _ema_series(macd_line_series, 9)
+    if not signal_series:
         return None
     line = macd_line_series[-1]
-    histogram = line - signal
-    return {"macd": line, "macd_signal": signal, "macd_histogram": histogram}
+    signal = signal_series[-1]
+    return {"macd": line, "macd_signal": signal, "macd_histogram": line - signal}
 
 
 def rsi(values: Iterable[Decimal], period: int = 14) -> Optional[Decimal]:

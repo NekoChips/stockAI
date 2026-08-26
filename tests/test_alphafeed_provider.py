@@ -134,6 +134,43 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         self.assertEqual(kwargs["count"], 2000)
         self.assertTrue(kwargs["to_dataframe"])
 
+    def test_external_daily_bars_accept_non_a_share_symbol_and_use_raw_prices(self):
+        client = FakeAlphaFeedClient(
+            kline_frames={
+                "XLK.US": FakeFrame(
+                    [
+                        {"trade_date": "2026-08-20", "close": 100},
+                        {"trade_date": "2026-08-21", "close": 103},
+                    ]
+                )
+            }
+        )
+        adapter = AlphaFeedAdapter(
+            client=client,
+            api_key="external-daily-bars",
+            kline_max_requests_per_minute=10,
+            min_request_interval_seconds=0,
+            monotonic_fn=lambda: 10,
+            sleep_fn=lambda _seconds: None,
+        )
+
+        bars = adapter.get_external_daily_bars("XLK.US", "20260819", "20260821", count=5)
+
+        self.assertEqual([bar.close_price for bar in bars], [Decimal("100"), Decimal("103")])
+        symbol, kwargs = client.klines.calls[0]
+        self.assertEqual(symbol, "XLK.US")
+        self.assertEqual(kwargs["period"], "1d")
+        self.assertEqual(kwargs["adjust"], "none")
+        self.assertEqual(kwargs["count"], 5)
+
+    def test_external_daily_kline_quota_allows_ten_but_clamps_above_plan_limit(self):
+        adapter = AlphaFeedAdapter(
+            client=FakeAlphaFeedClient(),
+            kline_max_requests_per_minute=99,
+        )
+
+        self.assertEqual(adapter.kline_max_requests_per_minute, 10)
+
     def test_missing_api_key_is_explained_when_client_is_not_injected(self):
         adapter = AlphaFeedAdapter(api_key="", sdk_importer=lambda: (_ for _ in ()).throw(ImportError("missing")))
 
@@ -158,7 +195,7 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         adapter.get_quote("588170.SH")
         adapter.get_quote("588170.SH")
 
-        self.assertEqual(waits, [7.5])
+        self.assertEqual(waits, [6.0])
 
     def test_quote_cache_avoids_duplicate_sdk_calls(self):
         client = FakeAlphaFeedClient(quote_frame=FakeFrame([{"symbol": "588170.SH", "last_price": 1.0, "prev_close": 1.0, "open": 1.0, "high": 1.0, "low": 1.0}]))
@@ -191,7 +228,7 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         adapters[0].get_quote("588170.SH")
         adapters[1].get_quote("588170.SH")
 
-        self.assertEqual(waits, [7.5])
+        self.assertEqual(waits, [6.0])
 
     def test_quote_requests_are_split_into_five_symbol_batches(self):
         symbols = [f"60000{index}.SH" for index in range(1, 7)]
@@ -263,9 +300,9 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual(adapter.quote_max_symbols_per_request, 5)
-        self.assertEqual(adapter.quote_max_requests_per_minute, 8)
+        self.assertEqual(adapter.quote_max_requests_per_minute, 10)
         self.assertEqual(adapter.kline_max_symbols_per_request, 1)
-        self.assertEqual(adapter.kline_max_requests_per_minute, 8)
+        self.assertEqual(adapter.kline_max_requests_per_minute, 10)
 
     def test_missing_required_quote_field_raises_for_fallback(self):
         client = FakeAlphaFeedClient(quote_frame=FakeFrame([{"symbol": "588170.SH", "last_price": 1.0, "prev_close": 1.0}]))

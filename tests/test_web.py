@@ -2,34 +2,119 @@ import gzip
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from stock_ai_agent.config import load_config
+from stock_ai_agent.config import InstrumentConfig, load_config
 from stock_ai_agent.models import Bar, Direction, Fill, Portfolio, Position, Quote
-from stock_ai_agent.storage.sqlite import SQLiteMarketDataStore
+from stock_ai_agent.storage.mock import MockMarketDataStore as SQLiteMarketDataStore
 from stock_ai_agent.web import (
     add_dashboard_watchlist_item,
     build_dashboard_backtests_payload,
     build_dashboard_calendar_payload,
+    build_dashboard_data_health_payload,
+    build_dashboard_lhb_raw_payload,
+    build_dashboard_lhb_records_payload,
     build_dashboard_overview_payload,
     build_dashboard_payload,
     build_dashboard_performance_payload,
     build_dashboard_reports_payload,
+    build_dashboard_sectors_payload,
+    build_strategy_readiness_payload,
     build_dashboard_report_payload,
     build_instrument_detail_payload,
     confirm_backtest_runs,
     remove_dashboard_watchlist_item,
-    render_dashboard_html,
     search_watchlist_instruments,
     _send,
 )
+from stock_ai_agent.web_actions import confirm_dashboard_strategy_profile, save_dashboard_strategy_profile
+from stock_ai_agent.web_actions import set_dashboard_watchlist_trading
+from stock_ai_agent.web_dashboard import build_dashboard_strategies_payload
 
 
 class WebDashboardTests(unittest.TestCase):
-    def test_instrument_detail_uses_persisted_ticks_bars_and_trade_markers(self):
+    def test_reference_data_payloads_expose_sector_and_lhb_raw_records(self):
+        store = SQLiteMarketDataStore()
+        store.save_sector_mapping("588170.SH", "信息技术", source="test")
+        store.save_lhb_records([{"trade_date": "2026-08-26", "symbol": "588170.SH", "net_buy": "100", "raw_data": {"代码": "588170"}, "seat_detail_available": False}])
+
+        sectors = build_dashboard_sectors_payload(store, "588170.SH")
+        records = build_dashboard_lhb_records_payload(store, date(2026, 8, 26), "588170.SH")
+        raw = build_dashboard_lhb_raw_payload(store, "2026-08-26|588170.SH")
+
+        self.assertEqual(sectors["sectors"][0]["sector"], "信息技术")
+        self.assertEqual(records["records"][0]["symbol"], "588170.SH")
+        self.assertEqual(raw["raw"]["代码"], "588170")
+
+    def test_strategy_readiness_reports_comprehensive_sector_and_data_health(self):
+        config = replace(load_config(), universe=[InstrumentConfig("588170.SH", "etf", "科创100ETF基金")])
+        store = SQLiteMarketDataStore()
+        store.add_watchlist_item("588170.SH", "科创100ETF基金", "etf")
+        store.save_data_task_status("external_us_daily", date(2026, 8, 26), "degraded", 10, 3, "QQQ 失败", __import__("datetime").datetime.now(), __import__("datetime").datetime.now())
+        store.save_overseas_market_data([
+            {"market": "US", "symbol": "^IXIC", "source_symbol": "QQQ.US", "is_proxy": True, "trade_date": "2026-08-25", "name": "纳斯达克", "prev_close": "100", "close_price": "101", "change_pct": "1", "source": "alphafeed", "data_status": "ready", "fetched_at": "2026-08-26T09:05:00+00:00"},
+            {"market": "US", "symbol": "^GSPC", "source_symbol": "SPY.US", "is_proxy": True, "trade_date": "2026-08-25", "name": "标普500", "prev_close": "100", "close_price": "101", "change_pct": "1", "source": "alphafeed", "data_status": "ready", "fetched_at": "2026-08-26T09:05:00+00:00"},
+            {"market": "US", "symbol": "^DJI", "source_symbol": "DIA.US", "is_proxy": True, "trade_date": "2026-08-25", "name": "道琼斯", "prev_close": "100", "close_price": "101", "change_pct": "1", "source": "alphafeed", "data_status": "ready", "fetched_at": "2026-08-26T09:05:00+00:00"},
+        ])
+
+        readiness = build_strategy_readiness_payload(config, store, "588170.SH", date(2026, 8, 26))
+        health = build_dashboard_data_health_payload(config, store, date(2026, 8, 26))
+
+        self.assertEqual(readiness["sector"]["value"], "综合")
+        self.assertTrue(readiness["sector"]["defaulted"])
+        self.assertEqual(len(health["tasks"]), 1)
+    def test_new_strategy_profile_gets_server_generated_id(self):
         config = load_config()
+        store = SQLiteMarketDataStore()
+
+        saved = save_dashboard_strategy_profile(
+            config,
+            store,
+            {
+                "name_zh": "自动生成 ID 的组合",
+                "name_en": "Generated Profile",
+                "scope_type": "asset_type",
+                "scope_value": "etf",
+                "enabled": ["mean_reversion"],
+                "weights": {"mean_reversion": "1"},
+            },
+        )
+
+        profile_id = saved["saved_profile_id"]
+        self.assertTrue(profile_id.startswith("profile_"))
+        self.assertIn(profile_id, {item["profile_id"] for item in saved["strategies"]["profiles"]})
+
+    def test_strategy_center_persists_draft_and_confirmation(self):
+        config = load_config()
+        store = SQLiteMarketDataStore()
+
+        saved = save_dashboard_strategy_profile(
+            config,
+            store,
+            {
+                "profile_id": "588170.SH",
+                "name_zh": "科创100组合",
+                "name_en": "STAR 100 Profile",
+                "scope_type": "symbol",
+                "scope_value": "588170.SH",
+                "enabled": ["mean_reversion"],
+                "weights": {"mean_reversion": "1"},
+            },
+        )
+
+        self.assertEqual(saved["strategies"]["profiles"][-1]["status"], "draft")
+        confirmed = confirm_dashboard_strategy_profile(config, store, "588170.SH")
+        self.assertEqual(
+            next(item for item in confirmed["strategies"]["profiles"] if item["profile_id"] == "588170.SH")["status"],
+            "active",
+        )
+        self.assertTrue(build_dashboard_strategies_payload(config, store)["strategies"]["definitions"])
+
+    def test_instrument_detail_uses_persisted_ticks_bars_and_trade_markers(self):
+        config = replace(load_config(), universe=[InstrumentConfig("588170.SH", "etf", "科创100ETF基金")])
         quote_time = date(2026, 8, 17)
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "detail.sqlite3")
@@ -130,7 +215,7 @@ class WebDashboardTests(unittest.TestCase):
         self.assertNotIn("600519.SH", {item["symbol"] for item in removed["watchlist"]})
 
     def test_removing_default_watchlist_item_hides_it_without_changing_config(self):
-        config = load_config()
+        config = replace(load_config(), universe=[InstrumentConfig("588170.SH", "etf", "科创100ETF基金")])
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "dashboard.sqlite3")
             removed = remove_dashboard_watchlist_item(config, store, "588170.SH")
@@ -267,111 +352,10 @@ class WebDashboardTests(unittest.TestCase):
         self.assertEqual(agent_points[-1]["return_rate"], "0.080000")
         self.assertEqual(payload["benchmark_outperformance"][0]["difference"], "0.070000")
 
-    def test_dashboard_html_references_local_api(self):
-        html = render_dashboard_html()
+    def test_legacy_dashboard_renderer_is_removed(self):
+        from stock_ai_agent import web_assets
 
-        self.assertIn("StockAI · 策略执行台", html)
-        self.assertIn("/api/dashboard", html)
-        self.assertIn("/api/dashboard/overview", html)
-        self.assertIn("/api/dashboard/performance", html)
-        self.assertIn("/api/dashboard/calendar", html)
-        self.assertIn("/api/dashboard/backtests", html)
-        self.assertIn("/api/dashboard/reports", html)
-        self.assertIn("instrumentDetailView", html)
-        self.assertIn("/api/instruments/", html)
-        self.assertNotIn("fetch('/api/dashboard' + performanceQuery())", html)
-        self.assertIn("loadBacktests", html)
-        self.assertIn("盈亏排行榜", html)
-        self.assertIn("盈亏分析", html)
-        self.assertIn("calendarGrid", html)
-        self.assertIn("交易看板", html)
-        self.assertIn("回测记录", html)
-        self.assertIn("日报归档", html)
-        self.assertIn("dailyReportView", html)
-        self.assertIn("loadDailyReports", html)
-        self.assertIn("loadMoreDailyReports", html)
-        self.assertIn("dailyReportRows", html)
-        self.assertIn("确认所选", html)
-        self.assertIn("calendarPeriodPicker", html)
-        self.assertIn("antd@5.29.3", html)
-        self.assertIn("react@18.3.1", html)
-        self.assertIn("dayjs@1.11.22/locale/zh-cn.js", html)
-        self.assertIn("DatePicker", html)
-        self.assertIn("ConfigProvider", html)
-        self.assertIn("zhDatePickerLocale", html)
-        self.assertIn("请选择月份", html)
-        self.assertIn("shortMonths", html)
-        self.assertIn("十一月", html)
-        self.assertIn("calendar-period-popup", html)
-        self.assertIn("calendarValueToggle", html)
-        self.assertIn("看收益额", html)
-        self.assertIn("ant-picker", html)
-        self.assertIn("popupClassName", html)
-        self.assertNotIn('<script src="https://unpkg.com/', html)
-        self.assertIn("loadOptionalUiLibraries", html)
-        self.assertLess(html.rfind("const initialDashboardLoad = load()"), html.rfind("loadOptionalUiLibraries"))
-        self.assertIn('data-mode="monthly"', html)
-        self.assertIn('data-mode="yearly"', html)
-        self.assertIn("clamp(16px,3vw,48px)", html)
-        self.assertIn("@media (max-width:1100px)", html)
-        self.assertNotIn("收益率走势", html)
-        self.assertNotIn('data-mode="daily"', html)
-        self.assertNotIn("calendarValueTabs", html)
-        self.assertNotIn("calendarPeriodSelect", html)
-        self.assertNotIn("calendarPickerPanel", html)
-        self.assertNotIn('class="picker-cell', html)
-        self.assertNotIn("max-width: 920px", html)
-        self.assertNotIn("周期收益率", html)
-        self.assertNotIn("JSON.stringify(x.parameters)", html)
-        self.assertNotIn("ticker-track", html)
-        self.assertIn('class="skip-link"', html)
-        self.assertIn('aria-live="polite"', html)
-        self.assertIn("refreshDashboard", html)
-        self.assertIn("decisionTimeline", html)
-        self.assertIn("chartLegend", html)
-        self.assertIn("chartTooltip", html)
-        self.assertIn("toggleChartSeries", html)
-        self.assertIn("showChartPoint", html)
-        self.assertIn("ResizeObserver", html)
-        self.assertIn("lucide@", html)
-        self.assertIn("prefers-reduced-motion", html)
-        self.assertIn(".decision-panel { grid-column:2; display:flex", html)
-        self.assertIn("positions-scroll", html)
-        self.assertIn("行情订阅已就绪", html)
-        self.assertIn("align-items:stretch", html)
-        self.assertIn(".decision-panel { grid-column:2; display:flex", html)
-        self.assertIn(".positions-panel { grid-column:1; display:flex", html)
-        self.assertIn("#positions { display:flex; flex:1", html)
-        self.assertIn(".positions-footer { flex:none", html)
-        self.assertIn(".calendar-total > div { display:flex", html)
-        self.assertIn("添加标的", html)
-        self.assertIn("instrumentDrawer", html)
-        self.assertIn("/api/watchlist/search", html)
-        self.assertIn("addSelectedInstrument", html)
-        self.assertIn("removeWatchlistItem", html)
-        self.assertIn("benchmarkStatus", html)
-        self.assertIn("data-remove-symbol", html)
-        self.assertIn("performanceRangeTabs", html)
-        self.assertIn("benchmarkOutperformance", html)
-        self.assertIn('grid-template-columns:max-content 256px', html)
-        self.assertIn('grid-template-areas:"range picker" ". chart"', html)
-        self.assertIn('#performanceRangeTabs { grid-area:range; }', html)
-        self.assertIn('#chartTabs { grid-area:chart; justify-self:end; }', html)
-        self.assertIn('.performance-range-picker .ant-picker { width:100%;', html)
-        self.assertIn('const nextMode = button.dataset.mode, currentRange = performanceRange();', html)
-        self.assertIn('performanceStart = currentRange.start;', html)
-        self.assertIn("performanceRangeMode='custom'", html)
-        self.assertNotIn("performanceRangeMode !== 'custom'", html)
-        self.assertIn('@media (min-width:721px) and (max-width:1500px)', html)
-        self.assertIn('.performance-panel .panel-head { display:grid; grid-template-columns:minmax(0,1fr); gap:14px; }', html)
-        self.assertIn("dayFormat:'D'", html)
-        self.assertNotIn("dayFormat:'D日'", html)
-        self.assertIn("const disabledDate=current=>{if(!current)return false;const key=calendarMode", html)
-        self.assertNotIn("optionSet=new Set(options)", html)
-        self.assertLess(html.index('class="chart-wrap"'), html.index('id="benchmarkOutperformance"'))
-        self.assertNotIn('onclick="removeWatchlistItem(', html)
-        self.assertNotIn('onclick="toggleChartSeries(', html)
-        self.assertNotIn('class="chart-summary"', html)
+        self.assertFalse(hasattr(web_assets, "render_dashboard_html"))
 
     def test_backtest_confirm_updates_selected_runs(self):
         config = load_config()
@@ -382,7 +366,132 @@ class WebDashboardTests(unittest.TestCase):
             payload = confirm_backtest_runs(config, store, [run_id])
 
         self.assertEqual(payload["updated"], 1)
-        self.assertEqual(payload["backtest_runs"][0]["status"], "已确认")
+        self.assertEqual(payload["backtest_runs"][0]["status"], "待下一轮生效")
+        profile = next(item for item in store.load_strategy_center(config)["profiles"] if item["profile_id"] == "default")
+        self.assertTrue(profile["pending_activation"])
+        self.assertEqual(profile["source_backtest_id"], run_id)
+
+    def test_confirmed_backtest_is_applied_by_next_monitor_round(self):
+        config = load_config()
+        store = SQLiteMarketDataStore()
+        store.ensure_strategy_defaults(config)
+        store.record_backtest_run(
+            "momentum_grid",
+            {"lookback_days": 5, "threshold": "0.04", "target_weight": "0.40"},
+            {"total_return": "0.05"},
+            "待人工确认",
+        )
+        run_id = store.load_backtest_runs()[0]["id"]
+
+        confirm_backtest_runs(config, store, [run_id])
+        applied = store.apply_pending_strategy_profiles()
+        self.assertEqual(applied[0]["profile_id"], "default")
+        self.assertEqual(store.load_active_strategy_profile("588170.SH", "etf")["quant"]["lookback_days"], 5)
+        store.mark_backtest_runs_applied([run_id])
+        self.assertEqual(store.load_backtest_runs()[0]["status"], "已应用")
+
+    def test_batch_backtest_confirmation_keeps_only_best_candidate_per_profile(self):
+        config = load_config()
+        store = SQLiteMarketDataStore()
+        store.record_backtest_run(
+            "momentum_grid", {"lookback_days": 5}, {"total_return": "0.05", "max_drawdown": "0.02"}, "待人工确认", "default"
+        )
+        store.record_backtest_run(
+            "momentum_grid", {"lookback_days": 10}, {"total_return": "0.12", "max_drawdown": "0.02"}, "待人工确认", "default"
+        )
+        runs = store.load_backtest_runs(limit=None)
+        payload = confirm_backtest_runs(config, store, [item["id"] for item in runs])
+        statuses = {item["parameters"]["lookback_days"]: item["status"] for item in payload["backtest_runs"]}
+
+        self.assertEqual(payload["queued"], 1)
+        self.assertEqual(payload["rejected"], 1)
+        self.assertEqual(statuses[10], "待下一轮生效")
+        self.assertEqual(statuses[5], "已拒绝")
+
+    def test_decision_events_payload_merges_decisions_orders_and_fills_chronologically(self):
+        from datetime import datetime, timezone
+
+        from stock_ai_agent.models import Decision, OrderStatus, PaperOrder
+        from stock_ai_agent.web_dashboard import build_dashboard_decision_events_payload
+
+        trade_date = date(2026, 8, 17)
+        store = SQLiteMarketDataStore()
+
+        store.record_decision(
+            Decision("588170.SH", Direction.BUY, Decimal("0.20"), True, ["风控通过"]),
+            trade_date,
+        )
+        store._decision_events[-1]["event_at"] = "2026-08-17T09:30:00+00:00"
+
+        order_time = datetime(2026, 8, 17, 9, 35, tzinfo=timezone.utc)
+        store.save_order(
+            PaperOrder(
+                "588170.SH",
+                Direction.BUY,
+                1000,
+                Decimal("1.22"),
+                status=OrderStatus.SUBMITTED,
+                order_id="ord-1",
+                created_at=order_time,
+                updated_at=order_time,
+            ),
+            trade_date,
+        )
+
+        fill_time = datetime(2026, 8, 17, 9, 40, tzinfo=timezone.utc)
+        store.record_fill(
+            Fill(
+                "588170.SH",
+                Direction.BUY,
+                1000,
+                Decimal("1.22"),
+                Decimal("1"),
+                Decimal("0.01"),
+                fill_time,
+                order_id="ord-1",
+            ),
+            trade_date,
+        )
+
+        payload = build_dashboard_decision_events_payload(store, as_of=trade_date)
+
+        self.assertEqual(set(payload.keys()), {"events", "as_of", "fill_count"})
+        self.assertEqual(payload["as_of"], "2026-08-17")
+        self.assertEqual(payload["fill_count"], 1)
+
+        events = payload["events"]
+        self.assertEqual(len(events), 3)
+        event_times = [item["event_at"] for item in events]
+        self.assertEqual(event_times, sorted(event_times))
+        types = {item["type"] for item in events}
+        self.assertIn("decision", types)
+        self.assertIn("order", types)
+        self.assertIn("fill", types)
+
+        limited = build_dashboard_decision_events_payload(store, as_of=trade_date, limit=1)
+        self.assertEqual(len(limited["events"]), 1)
+        self.assertEqual(limited["events"][0]["type"], "fill")
+
+    def test_decision_events_invalid_date_raises(self):
+        from stock_ai_agent.web_dashboard import _query_date
+
+        with self.assertRaises(ValueError):
+            _query_date({"date": ["not-a-date"]}, "date")
+
+    def test_configured_watchlist_items_are_persisted_and_can_change_trading_permission(self):
+        config = replace(
+            load_config(),
+            universe=[InstrumentConfig("588170.SH", "etf", "科创100ETF基金", trading_enabled=True)],
+        )
+        store = SQLiteMarketDataStore()
+
+        overview = build_dashboard_overview_payload(config, store)
+        self.assertEqual(store.load_watchlist_items()[0]["symbol"], "588170.SH")
+        self.assertTrue(overview["watchlist"][0]["trading_enabled"])
+
+        set_dashboard_watchlist_trading(config, store, "588170.SH", False)
+        updated = build_dashboard_overview_payload(config, store)
+        self.assertFalse(updated["watchlist"][0]["trading_enabled"])
 
 
 if __name__ == "__main__":

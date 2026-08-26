@@ -9,6 +9,7 @@ __pycache__
 data
 reports
 dist
+frontend/node_modules
 config/*.local.yaml
 config/*.secret.yaml
 docker/.env.release

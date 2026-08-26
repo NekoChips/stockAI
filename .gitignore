@@ -7,7 +7,7 @@
 .cursor/
 .gemini/
 .skills/
-design-system/
+/design-system/
 
 # AI planning, review, and workflow artifacts
 /design.md
@@ -15,6 +15,7 @@ design-system/
 /review.md
 /final_report.md
 /openspec/
+/STRATEGY_IMPLEMENTATION_PLAN.md
 
 # Python
 __pycache__/
@@ -34,7 +35,7 @@ env/
 data/*.sqlite3
 data/*.sqlite3-*
 data/backups/
-reports/
+/reports/
 .learnings/
 
 # Deployment-only configuration and credentials
@@ -42,3 +43,16 @@ config/*.local.yaml
 config/*.secret.yaml
 docker/.env.release
 dist/
+build/
+*.egg-info/
+*.tsbuildinfo
+
+src/stock_ai_agent/spa/**
+!src/stock_ai_agent/spa/.gitkeep
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+.pnpm-store/
+
+.worktrees/
+.superpowers/

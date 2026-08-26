@@ -10,7 +10,7 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("image: ghcr.io/nekochips/stockai:latest", compose)
         self.assertIn("pull_policy: always", compose)
         self.assertIn("healthcheck:", compose)
-        self.assertIn("http://127.0.0.1:8765/healthz", compose)
+        self.assertIn("http://127.0.0.1:8765/readyz", compose)
         self.assertNotIn("http://127.0.0.1:8765/api/dashboard', timeout=5", compose)
         self.assertNotIn("build:", compose)
 
@@ -24,9 +24,10 @@ class DeploymentAssetTests(unittest.TestCase):
         self.assertIn("actions/attest@v4", workflow)
         self.assertIn("ghcr.io/nekochips/stockai", workflow)
         self.assertIn("refs/heads/release", workflow)
-        self.assertIn("type=ref,event=branch", workflow)
         self.assertIn("type=ref,event=tag", workflow)
         self.assertIn("type=raw,value=latest", workflow)
+        self.assertNotIn("type=ref,event=branch", workflow)
+        self.assertNotIn("value=release", workflow)
         self.assertNotIn("value=stable", workflow)
 
     def test_release_environment_exposes_image_selection(self):

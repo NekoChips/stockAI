@@ -1,7 +1,7 @@
 import unittest
 from decimal import Decimal
 
-from stock_ai_agent.models import Direction, StrategySignal
+from stock_ai_agent.models import Direction, StrategyDataStatus, StrategySignal
 from stock_ai_agent.strategy import aggregate_signals
 
 
@@ -38,6 +38,74 @@ class StrategyAggregatorTests(unittest.TestCase):
         result = aggregate_signals([signal("technical", 3, "0.60"), signal("volatility_target", -1, "0.20", Direction.REDUCE)])
 
         self.assertLessEqual(result.target_weight, Decimal("0.20"))
+
+    def test_neutral_drawdown_check_does_not_block_a_new_position(self):
+        signals = [
+            signal("technical_composite", 6, "0.60"),
+            signal("time_series_momentum", 2, "0.40"),
+            signal("drawdown_control", Decimal("0.5"), "1.00", Direction.HOLD),
+        ]
+
+        result = aggregate_signals(signals)
+
+        self.assertEqual(result.direction, Direction.BUY)
+        self.assertEqual(result.target_weight, Decimal("0.60"))
+
+    def test_risk_cap_is_independent_of_signal_order(self):
+        signals = [signal("technical_composite", 3, "0.60"), signal("volatility_target", -2, "0.20", Direction.REDUCE)]
+
+        forward = aggregate_signals(signals)
+        reverse = aggregate_signals(list(reversed(signals)))
+
+        self.assertEqual(forward.target_weight, Decimal("0.20"))
+        self.assertEqual(reverse.target_weight, Decimal("0.20"))
+
+    def test_unavailable_optional_strategy_is_excluded_and_remaining_weight_is_normalized(self):
+        available = signal("technical_composite", 3, "0.40")
+        unavailable = StrategySignal(
+            "overseas_market_sentiment",
+            "588170.SH",
+            Direction.WATCH,
+            Decimal("0"),
+            Decimal("0"),
+            Decimal("0"),
+            [],
+            ["海外数据缺失"],
+            "海外数据缺失",
+            data_status=StrategyDataStatus.UNAVAILABLE,
+            data_status_reason="海外数据缺失",
+        )
+
+        result = aggregate_signals(
+            [available, unavailable],
+            {"technical_composite": Decimal("0.40"), "overseas_market_sentiment": Decimal("0.60")},
+            {"buy_score_threshold": "0.60", "score_normalization_divisor": "3"},
+        )
+
+        self.assertEqual(result.direction, Direction.BUY)
+        self.assertIn("overseas_market_sentiment", "；".join(result.objections))
+        self.assertEqual(result.participating_strategies, ["technical_composite"])
+        self.assertEqual(result.excluded_strategies, ["overseas_market_sentiment"])
+        self.assertEqual(result.normalized_weights["technical_composite"], Decimal("1"))
+
+    def test_all_unavailable_strategies_keep_the_symbol_on_watch(self):
+        unavailable = StrategySignal(
+            "external",
+            "588170.SH",
+            Direction.WATCH,
+            Decimal("0"),
+            Decimal("0"),
+            Decimal("0"),
+            [],
+            ["数据缺失"],
+            "数据缺失",
+            data_status=StrategyDataStatus.UNAVAILABLE,
+        )
+
+        result = aggregate_signals([unavailable], {"external": Decimal("1")}, {})
+
+        self.assertEqual(result.direction, Direction.WATCH)
+        self.assertEqual(result.data_status, StrategyDataStatus.UNAVAILABLE)
 
 
 if __name__ == "__main__":
