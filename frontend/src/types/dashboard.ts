@@ -363,11 +363,20 @@ export interface DailyReportDecision {
 }
 
 export interface DailyReportTimelineEvent {
+  event_key?: string;
   event_at?: string;
   symbol?: string;
   phase?: string;
   direction?: string;
+  approved?: boolean;
+  target_weight?: JsonDecimal;
   status?: string;
+  filled_quantity?: number;
+  position_quantity?: number;
+  position_weight?: JsonDecimal;
+  position_state?: string;
+  strategy_id?: string;
+  order_id?: string;
   reasons?: string[];
 }
 

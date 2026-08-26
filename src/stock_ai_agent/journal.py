@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from hashlib import sha256
 from typing import Iterable
 
-from .models import Decision, Fill, Portfolio
+from .models import Decision, Fill, PaperOrder, Portfolio
+
+MAX_DECISION_REASON_ITEMS = 20
 
 
 def _merge_unique(items: list, additions: list) -> list:
@@ -12,7 +15,48 @@ def _merge_unique(items: list, additions: list) -> list:
     for item in [*items, *additions]:
         if item not in merged:
             merged.append(item)
-    return merged
+    return merged[-MAX_DECISION_REASON_ITEMS:]
+
+
+def decision_event_state(decision: Decision) -> tuple[str, str, bool, str]:
+    """Return only the business state that should create a new strategy event."""
+    signal = decision.source_signal
+    return (
+        decision.direction.value,
+        str(decision.target_weight),
+        bool(decision.approved),
+        signal.strategy_id if signal else "",
+    )
+
+
+def order_event_state(order: PaperOrder) -> tuple[str, str, int]:
+    """Return the order state that should create a new execution event."""
+    return (order.direction.value, order.status.value, int(order.filled_quantity))
+
+
+def decision_position_context(portfolio: Portfolio | None, symbol: str) -> tuple[int, Decimal, str]:
+    """Return compact position context for a persisted business decision."""
+    if portfolio is None:
+        return 0, Decimal("0"), "unknown"
+    position = portfolio.positions.get(symbol)
+    quantity = int(position.quantity) if position and position.quantity > 0 else 0
+    weight = portfolio.position_weight(symbol) if quantity else Decimal("0")
+    return quantity, weight, "held" if quantity else "empty"
+
+
+def make_business_event_key(
+    phase: str,
+    trade_date: date | str,
+    symbol: str,
+    state: tuple,
+    previous_event_id: int | str | None = None,
+) -> str:
+    """Create an idempotency key while allowing a state to recur after a transition."""
+    day = trade_date.isoformat() if isinstance(trade_date, date) else str(trade_date)
+    raw = "|".join(
+        [phase, day, symbol, str(previous_event_id or "initial"), *(str(item) for item in state)]
+    )
+    return sha256(raw.encode("utf-8")).hexdigest()
 
 
 def deduplicate_decision_rows(rows: Iterable[dict]) -> list[dict]:
@@ -44,10 +88,53 @@ def deduplicate_decision_rows(rows: Iterable[dict]) -> list[dict]:
     return [grouped[key] for key in order]
 
 
+def _timeline_state(row: dict) -> tuple:
+    phase = str(row.get("phase") or "")
+    if phase == "order":
+        return (
+            phase,
+            str(row.get("order_id") or ""),
+            str(row.get("direction") or ""),
+            str(row.get("status") or ""),
+            int(row.get("filled_quantity") or 0),
+        )
+    return (
+        phase,
+        str(row.get("symbol") or ""),
+        str(row.get("direction") or ""),
+        str(row.get("target_weight") or ""),
+        bool(row.get("approved")) if row.get("approved") is not None else None,
+        str(row.get("strategy_id") or ""),
+    )
+
+
+def deduplicate_decision_timeline(rows: Iterable[dict]) -> list[dict]:
+    """Collapse consecutive repeats while preserving meaningful state changes."""
+    result: list[dict] = []
+    last_by_stream: dict[tuple, tuple] = {}
+    index_by_stream: dict[tuple, int] = {}
+    for row in rows:
+        current = dict(row)
+        stream = (
+            str(current.get("trade_date") or ""),
+            str(current.get("phase") or ""),
+            str(current.get("order_id") or current.get("symbol") or ""),
+        )
+        state = _timeline_state(current)
+        if last_by_stream.get(stream) == state:
+            result[index_by_stream[stream]] = current
+            continue
+        last_by_stream[stream] = state
+        index_by_stream[stream] = len(result)
+        result.append(current)
+    return result
+
+
 def normalize_daily_report(report: dict) -> dict:
     """Normalize persisted report snapshots without mutating the stored object."""
     normalized = dict(report)
     normalized["decisions"] = deduplicate_decision_rows(report.get("decisions") or [])
+    normalized["decision_timeline"] = deduplicate_decision_timeline(report.get("decision_timeline") or [])
     return normalized
 
 

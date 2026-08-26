@@ -97,6 +97,11 @@ YYYY-MM-DD-topic.md
 - [功能治理与模块拆分设计](./architecture/2026-08-26-function-governance-design.md)
 - [前端设计系统](./design/2026-08-26-design-system.md)
 - [SPA 前端功能验收清单](./design/2026-08-25-frontend-parity-checklist.md)
+- [决策事件摘要与原始审计分离设计](./design/2026-08-26-decision-event-audit-separation.md)
+
+### 产品
+
+- [决策事件治理与摘要审计分离产品需求](./product/2026-08-26-decision-event-governance.md)
 
 ### 规格与实施计划
 
@@ -118,6 +123,10 @@ YYYY-MM-DD-topic.md
 - [策略实现审阅](./reviews/2026-08-24-strategy-implementation-review.md)
 - [功能治理实施复核](./reviews/2026-08-26-function-governance-review.md)
 - [v0.1.3 发布记录](./releases/v0.1.3.md)
+
+### 运维
+
+- [决策事件维护](./operations/2026-08-26-decision-event-maintenance.md)
 
 ## 归档说明
 

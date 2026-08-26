@@ -34,7 +34,7 @@ class MarketDataStore(Protocol):
     def save_portfolio(self, portfolio: Portfolio) -> None:
         ...
 
-    def record_decision(self, decision: Decision, trade_date: date) -> None:
+    def record_decision(self, decision: Decision, trade_date: date, portfolio: Portfolio | None = None) -> None:
         ...
 
     def load_decisions(self, trade_date: date) -> list[Decision]:
@@ -120,6 +120,19 @@ class MarketDataStore(Protocol):
         ...
 
     def compact_watch_decisions(self) -> int:
+        ...
+
+    def compact_decision_events(self, trade_date: date | None = None) -> int:
+        """Remove consecutive duplicate business events for one day or all days."""
+        ...
+
+    def purge_decision_events(
+        self,
+        as_of: date | None = None,
+        decision_retention_days: int = 30,
+        order_retention_days: int = 730,
+    ) -> int:
+        """Delete expired business events by phase in bounded maintenance work."""
         ...
 
     def load_watchlist_items(self) -> list[dict[str, str]]:

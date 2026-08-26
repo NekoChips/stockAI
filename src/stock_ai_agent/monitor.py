@@ -66,6 +66,7 @@ class RealTimePaperTradingMonitor:
         self._reported_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
         self._catalog_sync_attempted_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
         self._decision_compaction_attempted_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
+        self._decision_history_compaction_done = False
         self._quote_prune_attempted_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
         self._scheduled_task_dates: set[tuple[date, str]] = set()
         self._automatic_backtest_started_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
@@ -237,7 +238,7 @@ class RealTimePaperTradingMonitor:
                 historical_peak=historical_peak,
             )
             decisions.append(risk_result.decision)
-            self.store.record_decision(risk_result.decision, trade_date)
+            self.store.record_decision(risk_result.decision, trade_date, portfolio)
             if not risk_result.order:
                 continue
             try:
@@ -259,7 +260,7 @@ class RealTimePaperTradingMonitor:
                     aggregate,
                 )
                 decisions.append(rejected)
-                self.store.record_decision(rejected, trade_date)
+                self.store.record_decision(rejected, trade_date, portfolio)
                 continue
             fills.append(fill)
             self.store.record_fill(fill, trade_date)
@@ -615,6 +616,21 @@ class RealTimePaperTradingMonitor:
             return
         self._decision_compaction_attempted_dates.append(trade_date)
         self.store.compact_watch_decisions()
+        full_history_compaction = False
+        if hasattr(self.store, "compact_decision_events"):
+            if not self._decision_history_compaction_done:
+                removed = self.store.compact_decision_events()
+                self._decision_history_compaction_done = True
+                full_history_compaction = True
+            else:
+                removed = self.store.compact_decision_events(trade_date)
+            if removed:
+                scope = "历史" if full_history_compaction else trade_date.isoformat()
+                logger.info("已压缩%s重复业务事件：%s 条", scope, removed)
+        if hasattr(self.store, "purge_decision_events") and self._decision_history_compaction_done:
+            purged = self.store.purge_decision_events(trade_date)
+            if purged:
+                logger.info("已清理过期业务事件：%s 条", purged)
 
     def _prepare_intraday_quote_store(self, local_now: datetime) -> None:
         """Discard the previous trading day's snapshots before a new A-share session."""
