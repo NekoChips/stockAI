@@ -20,7 +20,7 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { ReloadOutlined, SaveOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import {
   confirmStrategyProfile,
@@ -35,6 +35,23 @@ import type {
   StrategyDefinition,
   StrategyProfile,
 } from '@/types/dashboard';
+
+/** Mirror legacy `newStrategyProfile()`: local draft cloned from default. */
+export function createNewStrategyDraft(profiles: StrategyProfile[]): StrategyProfile {
+  const base = profiles.find((item) => item.profile_id === 'default') ?? ({} as StrategyProfile);
+  return {
+    ...base,
+    profile_id: '',
+    name_zh: '新策略组合',
+    name_en: 'New Strategy Profile',
+    scope_type: 'symbol',
+    scope_value: '',
+    status: 'draft',
+    revision: 0,
+    draft_diff: [],
+    pending_activation: false,
+  };
+}
 
 function scopeLabel(profile: StrategyProfile): string {
   if (profile.scope_type === 'default') return '默认组合';
@@ -177,6 +194,7 @@ function StrategyMembers({
 
 export function StrategyWorkspace() {
   const [selectedProfileId, setSelectedProfileId] = useState('default');
+  const [localProfiles, setLocalProfiles] = useState<StrategyProfile[] | null>(null);
   const [form] = Form.useForm<ProfileFormValues>();
   const enabledIds = Form.useWatch('enabled', form) ?? [];
   const queryClient = useQueryClient();
@@ -188,7 +206,8 @@ export function StrategyWorkspace() {
   });
 
   const center = data?.strategies;
-  const profiles = center?.profiles ?? [];
+  const serverProfiles = center?.profiles ?? [];
+  const profiles = localProfiles ?? serverProfiles;
   const definitions = center?.definitions ?? [];
   const changes = center?.changes ?? [];
 
@@ -198,10 +217,11 @@ export function StrategyWorkspace() {
   );
 
   useEffect(() => {
-    if (profiles.length && !profiles.some((item) => item.profile_id === selectedProfileId)) {
-      setSelectedProfileId(profiles[0]?.profile_id ?? 'default');
+    if (localProfiles) return;
+    if (serverProfiles.length && !serverProfiles.some((item) => item.profile_id === selectedProfileId)) {
+      setSelectedProfileId(serverProfiles[0]?.profile_id ?? 'default');
     }
-  }, [profiles, selectedProfileId]);
+  }, [serverProfiles, selectedProfileId, localProfiles]);
 
   useEffect(() => {
     if (profile) {
@@ -210,6 +230,7 @@ export function StrategyWorkspace() {
   }, [profile, form]);
 
   const invalidate = () => {
+    setLocalProfiles(null);
     void queryClient.invalidateQueries({ queryKey: ['strategies'] });
   };
 
@@ -247,6 +268,17 @@ export function StrategyWorkspace() {
     },
   });
 
+  const handleNewProfile = () => {
+    const draft = createNewStrategyDraft(serverProfiles);
+    setLocalProfiles([draft]);
+    setSelectedProfileId('');
+  };
+
+  const handleRefresh = () => {
+    setLocalProfiles(null);
+    void refetch();
+  };
+
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
@@ -273,7 +305,8 @@ export function StrategyWorkspace() {
     }
   };
 
-  const activeCount = profiles.filter((item) => item.status === 'active').length;
+  const activeCount = serverProfiles.filter((item) => item.status === 'active').length;
+  const canActOnProfile = Boolean(profile?.profile_id) && profile != null && canConfirmOrDiscard(profile);
 
   const changeColumns: ColumnsType<StrategyChange> = [
     { title: '组合', dataIndex: 'profile_id', key: 'profile_id' },
@@ -294,7 +327,7 @@ export function StrategyWorkspace() {
         </Typography.Text>
         <Space>
           <Tag>{activeCount} 个生效组合</Tag>
-          <Button icon={<ReloadOutlined />} loading={isFetching} onClick={() => void refetch()}>
+          <Button icon={<ReloadOutlined />} loading={isFetching} onClick={handleRefresh}>
             刷新策略
           </Button>
         </Space>
@@ -308,14 +341,19 @@ export function StrategyWorkspace() {
             extra={<Tag>{profiles.length} 个</Tag>}
             styles={{ body: { padding: '12px 8px' } }}
           >
-            <Typography.Paragraph type="secondary" style={{ margin: '0 0 12px', fontSize: 12 }}>
-              选择组合查看和编辑
-            </Typography.Paragraph>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
+              <Typography.Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
+                选择组合查看和编辑
+              </Typography.Paragraph>
+              <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={handleNewProfile}>
+                新建组合
+              </Button>
+            </div>
             {profiles.length ? (
               <List
                 dataSource={profiles}
                 renderItem={(item) => {
-                  const selected = item.profile_id === (profile?.profile_id ?? '');
+                  const selected = item.profile_id === (profile?.profile_id ?? selectedProfileId);
                   const draft = hasDraft(item);
                   return (
                     <List.Item
@@ -382,7 +420,7 @@ export function StrategyWorkspace() {
                     />
                     <Button
                       size="small"
-                      disabled={!canConfirmOrDiscard(profile) || discardMutation.isPending}
+                      disabled={!canActOnProfile || discardMutation.isPending}
                       loading={discardMutation.isPending}
                       onClick={() => discardMutation.mutate(profile.profile_id)}
                     >
@@ -390,7 +428,7 @@ export function StrategyWorkspace() {
                     </Button>
                     <Button
                       size="small"
-                      disabled={!canConfirmOrDiscard(profile) || confirmMutation.isPending}
+                      disabled={!canActOnProfile || confirmMutation.isPending}
                       loading={confirmMutation.isPending}
                       onClick={() => confirmMutation.mutate(profile.profile_id)}
                     >
@@ -426,7 +464,7 @@ export function StrategyWorkspace() {
                   <Row gutter={10}>
                     <Col xs={24} md={8}>
                       <Form.Item name="profile_id" label="组合 ID（系统生成）">
-                        <Input readOnly={Boolean(profile.profile_id)} />
+                        <Input readOnly={!profile.profile_id} />
                       </Form.Item>
                     </Col>
                     <Col xs={24} md={8}>

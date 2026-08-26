@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Button, Card, Typography } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { fetchInstrumentDetail } from '@/api/instruments';
 import {
   InstrumentDetail,
@@ -12,6 +12,7 @@ import { useUiStore } from '@/stores/uiStore';
 
 export default function InstrumentDetailPage() {
   const { symbol = '' } = useParams<{ symbol: string }>();
+  const navigate = useNavigate();
   const announce = useUiStore((s) => s.announce);
   const setNotice = useUiStore((s) => s.setNotice);
 
@@ -37,6 +38,19 @@ export default function InstrumentDetailPage() {
       announce(`${data.instrument.name} 标的详情已打开。`);
     }
   }, [data?.instrument?.name, announce]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (window.history.length > 1) {
+        navigate(-1);
+      } else {
+        navigate('/');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [navigate]);
 
   if (!symbol) {
     return (

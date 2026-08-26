@@ -102,6 +102,7 @@ export function AddInstrumentDrawer({ open, onClose }: AddInstrumentDrawerProps)
       onClose={onClose}
       width={420}
       destroyOnClose
+      keyboard
       footer={
         <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
           <Button onClick={onClose}>取消</Button>

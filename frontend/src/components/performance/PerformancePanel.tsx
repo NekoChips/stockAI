@@ -326,7 +326,7 @@ export function PerformancePanel() {
               })}
             </div>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {pending.length ? `待同步：${pending.join('、')}` : '点按图例显示或隐藏曲线'}
+              {pending.length ? `待同步：${pending.join('、')}` : ''}
             </Typography.Text>
           </div>
 
