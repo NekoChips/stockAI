@@ -11,6 +11,7 @@ from binascii import Error as Base64Error
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import AppConfig
@@ -24,21 +25,28 @@ from .web_actions import (
     remove_dashboard_watchlist_item,
     save_dashboard_strategy_profile,
     save_dashboard_risk_config,
+    sync_dashboard_sectors,
     run_dashboard_backtest,
     set_dashboard_watchlist_trading,
     search_watchlist_instruments,
 )
-from .web_assets import render_dashboard_html
+from .web_assets import render_spa_index, resolve_spa_file
 from .web_dashboard import (
     build_dashboard_backtests_payload,
     build_dashboard_orders_payload,
+    build_dashboard_decision_events_payload,
     build_dashboard_calendar_payload,
+    build_dashboard_data_health_payload,
+    build_dashboard_lhb_raw_payload,
+    build_dashboard_lhb_records_payload,
     build_dashboard_overview_payload,
     build_dashboard_payload,
     build_dashboard_performance_payload,
     build_dashboard_report_payload,
     build_dashboard_reports_payload,
     build_dashboard_strategies_payload,
+    build_dashboard_sectors_payload,
+    build_strategy_readiness_payload,
     _query_date,
 )
 from .web_health import build_ready_payload
@@ -47,6 +55,38 @@ from .web_support import MAX_BODY_SIZE, _send, _send_error, _to_jsonable
 
 logger = logging.getLogger(__name__)
 PLACEHOLDER_PATTERN = re.compile(r"^\$\{[A-Z0-9_]+\}$")
+
+
+def _spa_content_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".html":
+        return "text/html; charset=utf-8"
+    if suffix == ".js":
+        return "application/javascript; charset=utf-8"
+    if suffix == ".css":
+        return "text/css; charset=utf-8"
+    if suffix == ".svg":
+        return "image/svg+xml"
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return f"image/{suffix.lstrip('.')}"
+    if suffix == ".json":
+        return "application/json; charset=utf-8"
+    if suffix == ".woff2":
+        return "font/woff2"
+    return "application/octet-stream"
+
+
+def _legacy_app_redirect_target(path: str, query: str) -> str:
+    """Map /app and /app/* to root SPA paths for old bookmarks."""
+    if path == "/app" or path == "/app/":
+        target = "/"
+    else:
+        target = path[len("/app") :] or "/"
+        if not target.startswith("/"):
+            target = "/" + target
+    if query:
+        target = f"{target}?{query}"
+    return target
 
 
 class BoundedThreadingHTTPServer(HTTPServer):
@@ -75,7 +115,7 @@ class BoundedThreadingHTTPServer(HTTPServer):
         self._executor.shutdown(wait=True)
 
 
-def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int = 8765) -> BoundedThreadingHTTPServer:
+def _build_dashboard_handler(config: AppConfig, store):
     class DashboardHandler(BaseHTTPRequestHandler):
         def _authorized(self) -> bool:
             if not config.web.require_basic_auth:
@@ -140,11 +180,21 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 return
             if not self._require_authorization():
                 return
-            if request.path == "/":
-                _send(self, "text/html; charset=utf-8", render_dashboard_html().encode("utf-8"))
-                return
             if request.path == "/api/dashboard/overview":
                 payload = build_dashboard_overview_payload(config, store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/dashboard/decision-events":
+                try:
+                    query = parse_qs(request.query)
+                    as_of = _query_date(query, "date")
+                    raw_limit = query.get("limit", ["100"])[0]
+                    limit = int(raw_limit)
+                except ValueError as exc:
+                    logger.warning("决策流参数无效：%s", exc)
+                    _send_error(self, 400, "请求参数无效。")
+                    return
+                payload = build_dashboard_decision_events_payload(store, as_of=as_of, limit=limit)
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             if request.path == "/api/dashboard/performance":
@@ -171,11 +221,51 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             if request.path == "/api/dashboard/orders":
+                logger.warning("访问已进入弃用观察期的接口：/api/dashboard/orders")
                 payload = build_dashboard_orders_payload(store)
-                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"), extra_headers={"Deprecation": "true"})
                 return
             if request.path == "/api/dashboard/strategies":
                 payload = build_dashboard_strategies_payload(config, store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/data-health":
+                payload = build_dashboard_data_health_payload(config, store)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/sectors":
+                symbol = parse_qs(request.query).get("symbol", [""])[0].strip().upper() or None
+                payload = build_dashboard_sectors_payload(store, symbol)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/lhb/records":
+                values = parse_qs(request.query)
+                raw_date = values.get("date", [""])[0].strip()
+                try:
+                    record_date = date.fromisoformat(raw_date) if raw_date else None
+                except ValueError:
+                    _send_error(self, 400, "龙虎榜日期必须使用 YYYY-MM-DD 格式。")
+                    return
+                symbol = values.get("symbol", [""])[0].strip().upper() or None
+                payload = build_dashboard_lhb_records_payload(store, record_date, symbol)
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            lhb_raw_prefix = "/api/lhb/records/"
+            if request.path.startswith(lhb_raw_prefix) and request.path.endswith("/raw"):
+                try:
+                    payload = build_dashboard_lhb_raw_payload(store, unquote(request.path[len(lhb_raw_prefix):-len("/raw")]))
+                except ValueError as exc:
+                    _send_error(self, 404, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/strategy-readiness":
+                symbol = parse_qs(request.query).get("symbol", [""])[0].strip().upper()
+                try:
+                    payload = build_strategy_readiness_payload(config, store, symbol)
+                except ValueError as exc:
+                    _send_error(self, 400, str(exc))
+                    return
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             instrument_prefix = "/api/instruments/"
@@ -214,6 +304,7 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
             if request.path == "/api/dashboard":
+                logger.warning("访问已进入弃用观察期的聚合接口：/api/dashboard")
                 try:
                     query = parse_qs(request.query)
                     payload_data = build_dashboard_payload(
@@ -227,7 +318,7 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                     _send_error(self, 400, "请求参数无效。")
                     return
                 payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
-                _send(self, "application/json; charset=utf-8", payload)
+                _send(self, "application/json; charset=utf-8", payload, extra_headers={"Deprecation": "true"})
                 return
             if request.path == "/api/watchlist/search":
                 query = parse_qs(request.query).get("q", [""])[0]
@@ -236,7 +327,26 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 payload = {"items": results, "catalog": status}
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 return
-            self.send_error(404, "Not Found")
+            if request.path.startswith("/api/"):
+                self.send_error(404, "Not Found")
+                return
+            if request.path == "/app" or request.path.startswith("/app/"):
+                target = _legacy_app_redirect_target(request.path, request.query)
+                self.send_response(302)
+                self.send_header("Location", target)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            asset = resolve_spa_file(request.path)
+            if asset is not None:
+                _send(self, _spa_content_type(asset), asset.read_bytes())
+                return
+            try:
+                html = render_spa_index()
+            except FileNotFoundError:
+                _send_error(self, 503, "SPA 尚未构建。请在 frontend/ 执行 npm run build，或使用包含前端构建阶段的 Docker 镜像。")
+                return
+            _send(self, "text/html; charset=utf-8", html.encode("utf-8"))
 
         def do_POST(self) -> None:
             if not self._require_authorization():
@@ -279,6 +389,16 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                     return
                 try:
                     payload = save_dashboard_risk_config(config, store, data)
+                except (TypeError, ValueError) as exc:
+                    _send_error(self, 400, str(exc))
+                    return
+                _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                return
+            if request.path == "/api/sectors/sync":
+                values = parse_qs(request.query)
+                symbol = values.get("symbol", [""])[0].strip().upper() or None
+                try:
+                    payload = sync_dashboard_sectors(config, store, symbol)
                 except (TypeError, ValueError) as exc:
                     _send_error(self, 400, str(exc))
                     return
@@ -356,6 +476,21 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
         def log_message(self, fmt: str, *args) -> None:
             return
 
-    server = BoundedThreadingHTTPServer((host, port), DashboardHandler)
+    return DashboardHandler
+
+
+def create_dashboard_server(
+    config: AppConfig,
+    store,
+    host: str = "127.0.0.1",
+    port: int = 0,
+) -> BoundedThreadingHTTPServer:
+    """Bind a dashboard server without calling serve_forever (for tests)."""
+    handler = _build_dashboard_handler(config, store)
+    return BoundedThreadingHTTPServer((host, port), handler)
+
+
+def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int = 8765) -> BoundedThreadingHTTPServer:
+    server = create_dashboard_server(config, store, host=host, port=port)
     server.serve_forever()
     return server

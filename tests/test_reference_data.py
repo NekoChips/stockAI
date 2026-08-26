@@ -5,7 +5,7 @@ from pathlib import Path
 
 from stock_ai_agent.config import load_config
 from stock_ai_agent.models import Bar
-from stock_ai_agent.reference_data import sync_benchmark_history, sync_instrument_catalog
+from stock_ai_agent.reference_data import sync_benchmark_history, sync_instrument_catalog, sync_sector_mappings
 from stock_ai_agent.storage.mock import MockMarketDataStore as SQLiteMarketDataStore
 
 
@@ -28,6 +28,10 @@ class FakeReferenceAdapter:
             Bar(symbol, datetime(2026, 1, 5), Decimal("100"), Decimal("100"), Decimal("100"), Decimal("100"), Decimal("1")),
             Bar(symbol, datetime(2026, 1, 6), Decimal("101"), Decimal("101"), Decimal("101"), Decimal("101"), Decimal("1")),
         ]
+
+    def get_sector(self, symbol, name, asset_type):
+        del name, asset_type
+        return {"600519.SH": "消费", "510300.SH": "金融地产"}.get(symbol)
 
 
 class ReferenceDataTests(unittest.TestCase):
@@ -58,6 +62,18 @@ class ReferenceDataTests(unittest.TestCase):
             sync_benchmark_history(config, store, adapter, as_of=date(2026, 1, 6))
 
         self.assertEqual(adapter.calls, [])
+
+    def test_syncs_watchlist_sector_mapping_idempotently(self):
+        config = load_config()
+        store = SQLiteMarketDataStore()
+        store.add_watchlist_item("600519.SH", "贵州茅台", "stock")
+        store.add_watchlist_item("510300.SH", "沪深300ETF", "etf")
+
+        count = sync_sector_mappings(config, store, FakeReferenceAdapter())
+
+        self.assertEqual(count, 2)
+        self.assertEqual(store.load_instrument_sector("600519.SH"), "消费")
+        self.assertEqual(store.load_instrument_sector("510300.SH"), "金融地产")
 
 
 if __name__ == "__main__":

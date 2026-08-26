@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any, List, Protocol
 
-from ..models import Bar, Quote
+from ..models import Bar, Decision, Fill, PaperOrder, Portfolio, Quote
 
 
 class MarketDataStore(Protocol):
@@ -25,6 +26,50 @@ class MarketDataStore(Protocol):
     def last_quote_age_seconds(self) -> float | None:
         ...
 
+    # Portfolio, decisions, orders, and fills form the execution contract used
+    # by both one-shot simulations and the realtime monitor.
+    def load_portfolio(self, initial_cash: Decimal) -> Portfolio:
+        ...
+
+    def save_portfolio(self, portfolio: Portfolio) -> None:
+        ...
+
+    def record_decision(self, decision: Decision, trade_date: date, portfolio: Portfolio | None = None) -> None:
+        ...
+
+    def load_decisions(self, trade_date: date) -> list[Decision]:
+        ...
+
+    def record_fill(self, fill: Fill, trade_date: date | None = None) -> None:
+        ...
+
+    def load_fills(self, trade_date: date) -> list[Fill]:
+        ...
+
+    def count_fills(self, trade_date: date, symbol: str | None = None) -> int:
+        ...
+
+    def save_order(self, order: PaperOrder, trade_date: date | None = None) -> PaperOrder:
+        ...
+
+    def load_open_orders(self, symbol: str | None = None) -> list[PaperOrder]:
+        ...
+
+    def count_symbol_operations(self, trade_date: date, symbol: str) -> int:
+        ...
+
+    def load_portfolio_snapshots(self) -> list[tuple[date, Decimal]]:
+        ...
+
+    def settle_t_plus_one(self, settle_date: date | None = None) -> bool:
+        ...
+
+    def acquire_monitor_lock(self, name: str = "stockai_monitor") -> bool:
+        ...
+
+    def release_monitor_lock(self, name: str = "stockai_monitor") -> None:
+        ...
+
     def save_quotes(self, quotes: List[Quote]) -> int:
         ...
 
@@ -34,10 +79,60 @@ class MarketDataStore(Protocol):
     def load_quote_ticks(self, symbol: str, trade_date: date) -> list[dict]:
         ...
 
+    def save_overseas_market_data(self, rows: list[dict]) -> int:
+        ...
+
+    def load_latest_overseas_data(self, market: str | None = None) -> list[dict]:
+        ...
+
+    def save_data_task_status(
+        self,
+        task_name: str,
+        trade_date: date,
+        status: str,
+        success_count: int,
+        failure_count: int,
+        error_summary: str,
+        started_at: Any,
+        finished_at: Any,
+    ) -> None:
+        ...
+
+    def load_data_task_status(self, task_name: str | None = None) -> list[dict]:
+        ...
+
+    def save_sector_mapping(self, symbol: str, sector: str, source: str = "manual") -> None:
+        ...
+
+    def load_instrument_sector(self, symbol: str) -> str | None:
+        ...
+
+    def load_sector_mappings(self, symbol: str | None = None) -> list[dict]:
+        ...
+
+    def save_lhb_records(self, rows: list[dict]) -> int:
+        ...
+
+    def load_lhb_records(self, start: date | None = None, end: date | None = None, symbol: str | None = None) -> list[dict]:
+        ...
+
     def prune_market_quotes(self, trade_date: date) -> int:
         ...
 
     def compact_watch_decisions(self) -> int:
+        ...
+
+    def compact_decision_events(self, trade_date: date | None = None) -> int:
+        """Remove consecutive duplicate business events for one day or all days."""
+        ...
+
+    def purge_decision_events(
+        self,
+        as_of: date | None = None,
+        decision_retention_days: int = 30,
+        order_retention_days: int = 730,
+    ) -> int:
+        """Delete expired business events by phase in bounded maintenance work."""
         ...
 
     def load_watchlist_items(self) -> list[dict[str, str]]:

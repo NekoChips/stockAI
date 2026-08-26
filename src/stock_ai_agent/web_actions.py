@@ -10,6 +10,7 @@ from uuid import uuid4
 from .config import AppConfig
 from .universe import infer_asset_type, validate_hs_symbol
 from .watchlist import add_watchlist_item, effective_watchlist, remove_watchlist_item, set_watchlist_trading_enabled
+from .reference_data import sync_sector_mappings
 from .risk_config import parse_risk_config, risk_config_payload
 from .web_support import _DASHBOARD_CACHE, _to_jsonable
 from .web_dashboard import build_dashboard_overview_payload
@@ -204,6 +205,13 @@ def set_dashboard_watchlist_trading(config: AppConfig, store, symbol: str, enabl
     updated = set_watchlist_trading_enabled(config, store, symbol, enabled)
     _DASHBOARD_CACHE.invalidate_store(id(store))
     return _to_jsonable({"updated": updated, "enabled": bool(enabled), "dashboard": build_dashboard_overview_payload(config, store)})
+
+
+def sync_dashboard_sectors(config: AppConfig, store, symbol: str | None = None) -> dict[str, Any]:
+    symbols = [symbol] if symbol else None
+    count = sync_sector_mappings(config, store, symbols=symbols)
+    _DASHBOARD_CACHE.invalidate_store(id(store))
+    return _to_jsonable({"synced_count": count, "sectors": store.load_sector_mappings(symbol=symbol) if hasattr(store, "load_sector_mappings") else []})
 
 
 def save_dashboard_strategy_profile(config: AppConfig, store, payload: dict[str, Any]) -> dict[str, Any]:

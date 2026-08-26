@@ -37,8 +37,26 @@ jobs:
       - name: Run test suite
         run: python -m unittest discover -s tests -p 'test_*.py'
 
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build frontend and enforce bundle budget
+        working-directory: frontend
+        run: npm run build
+
   publish:
-    needs: test
+    needs: [test, frontend]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

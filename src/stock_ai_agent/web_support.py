@@ -47,7 +47,13 @@ class TTLCache:
 _DASHBOARD_CACHE = TTLCache(ttl_seconds=45)
 
 
-def _send(handler: BaseHTTPRequestHandler, content_type: str, body: bytes, status: int = 200) -> None:
+def _send(
+    handler: BaseHTTPRequestHandler,
+    content_type: str,
+    body: bytes,
+    status: int = 200,
+    extra_headers: dict[str, str] | None = None,
+) -> None:
     try:
         headers = getattr(handler, "headers", {})
         accept_encoding = headers.get("Accept-Encoding", "") if hasattr(headers, "get") else ""
@@ -57,12 +63,16 @@ def _send(handler: BaseHTTPRequestHandler, content_type: str, body: bytes, statu
             handler.send_header("Content-Type", content_type)
             handler.send_header("Content-Encoding", "gzip")
             handler.send_header("Vary", "Accept-Encoding")
+            for name, value in (extra_headers or {}).items():
+                handler.send_header(name, value)
             handler.send_header("Content-Length", str(len(body)))
             handler.end_headers()
             handler.wfile.write(body)
             return
         handler.send_response(status)
         handler.send_header("Content-Type", content_type)
+        for name, value in (extra_headers or {}).items():
+            handler.send_header(name, value)
         handler.send_header("Content-Length", str(len(body)))
         handler.end_headers()
         handler.wfile.write(body)
@@ -94,4 +104,3 @@ def _to_jsonable(value: Any) -> Any:
     if hasattr(value, "value"):
         return value.value
     return value
-

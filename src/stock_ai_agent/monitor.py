@@ -7,24 +7,27 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time as clock_time, timedelta
 from decimal import Decimal
 from threading import Thread
-from typing import Callable, List, Optional, Protocol
+from typing import Callable, List, Optional
 from zoneinfo import ZoneInfo
 
 from .config import AppConfig
 from .data.providers import create_history_data_provider, create_market_data_provider, fetch_quotes
 from .data.analysis_sources import default_quant_seats, fetch_futures_positions, fetch_korea_market_data, fetch_lhb_data, fetch_us_market_data
+from .data.external_market import DEFAULT_US_SPECS, sync_external_market_data
 from .lhb_backtest import refresh_lhb_seat_profiles
 from .features import build_features
-from .history_sync import missing_history_range, previous_weekday
+from .history_sync import sync_watchlist_history
 from .journal import build_daily_report
 from .models import Bar, Decision, Direction, Fill, OrderStatus, Portfolio
 from .paper_broker import PaperBroker, PaperBrokerError
 from .quant_strategies import QuantContext
 from .risk import RiskEngine
 from .risk_config import resolve_risk_config
-from .reference_data import sync_benchmark_history, sync_instrument_catalog
+from .reference_data import sync_benchmark_history, sync_instrument_catalog, sync_sector_mappings
 from .strategy import StrategyContext, aggregate_signals
 from .strategy_runtime import evaluate_strategy_profile, load_external_strategy_context, resolve_strategy_profile
+from .storage.base import MarketDataStore
+from .trading_round import execute_order_state_machine
 from .trading_calendar import AShareTradingCalendar
 from .universe import Universe
 from .watchlist import effective_watchlist
@@ -32,59 +35,6 @@ from .watchlist import effective_watchlist
 
 logger = logging.getLogger(__name__)
 MAX_TRACKED_DATES = 90
-
-
-class PaperTradingStore(Protocol):
-    def load_bars(self, symbol: str, interval: str = "daily", limit: int | None = None) -> List[Bar]:
-        ...
-
-    def load_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None) -> dict[str, List[Bar]]:
-        ...
-
-    def load_portfolio(self, initial_cash: Decimal) -> Portfolio:
-        ...
-
-    def save_portfolio(self, portfolio: Portfolio) -> None:
-        ...
-
-    def record_decision(self, decision: Decision, trade_date: date) -> None:
-        ...
-
-    def load_decisions(self, trade_date: date) -> List[Decision]:
-        ...
-
-    def record_fill(self, fill: Fill, trade_date: date | None = None) -> None:
-        ...
-
-    def load_fills(self, trade_date: date) -> List[Fill]:
-        ...
-
-    def count_fills(self, trade_date: date, symbol: str | None = None) -> int:
-        ...
-
-    def settle_t_plus_one(self, settle_date: date | None = None) -> bool:
-        ...
-
-    def save_daily_report(self, report: dict) -> None:
-        ...
-
-    def load_portfolio_snapshots(self) -> list[tuple[date, Decimal]]:
-        ...
-
-    def save_quotes(self, quotes) -> int:
-        ...
-
-    def compact_watch_decisions(self) -> int:
-        ...
-
-    def prune_market_quotes(self, trade_date: date) -> int:
-        ...
-
-    def acquire_monitor_lock(self, name: str = "stockai_monitor") -> bool:
-        ...
-
-    def release_monitor_lock(self, name: str = "stockai_monitor") -> None:
-        ...
 
 
 @dataclass(frozen=True)
@@ -102,7 +52,7 @@ class RealTimePaperTradingMonitor:
     def __init__(
         self,
         config: AppConfig,
-        store: PaperTradingStore,
+        store: MarketDataStore,
         quote_provider=None,
         history_provider=None,
         trading_day_checker: Callable[[date], bool] | None = None,
@@ -111,12 +61,18 @@ class RealTimePaperTradingMonitor:
         self.store = store
         self.quote_provider = quote_provider or create_market_data_provider(config)
         self.history_provider = history_provider or create_history_data_provider(config)
+        self.external_history_provider = create_market_data_provider(config, "alphafeed")
         self.timezone = ZoneInfo(config.timezone)
         self._reported_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
-        self._catalog_sync_attempted_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
         self._decision_compaction_attempted_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
+        self._decision_history_compaction_done = False
         self._quote_prune_attempted_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
         self._scheduled_task_dates: set[tuple[date, str]] = set()
+        self._daily_kline_sync_attempted_windows: set[tuple[date, str]] = set()
+        self._daily_kline_completed_dates: set[date] = set()
+        self._automatic_backtest_started_dates: deque[date] = deque(maxlen=MAX_TRACKED_DATES)
+        self._automatic_backtest_pending_dates: set[date] = set()
+        self._last_strategy_run_at: datetime | None = None
         self._trading_data_ready = False
         self._initialization_warnings: list[str] = []
         if hasattr(store, "ensure_strategy_defaults"):
@@ -126,7 +82,12 @@ class RealTimePaperTradingMonitor:
         calendar = AShareTradingCalendar(store) if config.environment == "release" else None
         self._is_trading_day = trading_day_checker or (calendar.is_trading_day if calendar else lambda value: value.weekday() < 5)
 
-    def run_iteration(self, now: datetime | None = None, ignore_market_hours: bool = False) -> MonitorIterationResult:
+    def run_iteration(
+        self,
+        now: datetime | None = None,
+        ignore_market_hours: bool = False,
+        preloaded_quotes: dict[str, object] | None = None,
+    ) -> MonitorIterationResult:
         local_now = self._local_now(now)
         trade_date = local_now.date()
         self._apply_pending_strategy_changes()
@@ -139,7 +100,6 @@ class RealTimePaperTradingMonitor:
         ):
             return MonitorIterationResult("skipped", "当前不在 A 股连续竞价交易时段，跳过本轮盯盘。", portfolio, [], [])
 
-        self._sync_daily_reference_data(trade_date)
         self._compact_watch_decisions(trade_date)
         self._prepare_intraday_quote_store(local_now)
 
@@ -149,7 +109,13 @@ class RealTimePaperTradingMonitor:
 
         watchlist = effective_watchlist(self.config, self.store)
         held_symbols = set(portfolio.positions)
-        universe = Universe.from_config([item for item in watchlist if item.trading_enabled or item.symbol in held_symbols])
+        universe = Universe.from_config(
+            [
+                item
+                for item in watchlist
+                if item.lifecycle_status != "dormant" and (item.trading_enabled or item.symbol in held_symbols)
+            ]
+        )
         active_risk = resolve_risk_config(self.config, self.store)
         risk = RiskEngine(active_risk, universe)
         strategy_profiles = {
@@ -184,14 +150,14 @@ class RealTimePaperTradingMonitor:
             if len(bars_by_symbol.get(instrument.symbol, [])) >= minimum_history_bars
         ]
         symbols = [instrument.symbol for instrument in universe.instruments]
-        batch_quotes = None
+        batch_quotes = preloaded_quotes
         batch_requested = bool(symbols and hasattr(self.quote_provider, "get_quotes"))
-        if batch_requested:
+        if batch_requested and batch_quotes is None:
             try:
                 batch_quotes = fetch_quotes(self.quote_provider, symbols)
             except Exception as exc:  # noqa: BLE001 - fallback provider errors are isolated from the loop
                 warnings.extend([f"{symbol} 实时行情获取失败：{exc}" for symbol in symbols])
-        if batch_quotes:
+        if batch_quotes and preloaded_quotes is None:
             self.store.save_quotes(list(batch_quotes.values()))
 
         # Resume persisted submitted/partial orders before creating any fresh order.
@@ -285,25 +251,18 @@ class RealTimePaperTradingMonitor:
                 historical_peak=historical_peak,
             )
             decisions.append(risk_result.decision)
-            self.store.record_decision(risk_result.decision, trade_date)
+            self.store.record_decision(risk_result.decision, trade_date, portfolio)
             if not risk_result.order:
                 continue
             try:
-                created = broker.create(replace(risk_result.order, asset_type=instrument.asset_type))
-                if hasattr(self.store, "save_order"):
-                    self.store.save_order(created, trade_date)
-                approved = broker.approve(created)
-                if hasattr(self.store, "save_order"):
-                    self.store.save_order(approved, trade_date)
-                order = broker.submit(approved)
-                if hasattr(self.store, "save_order"):
-                    self.store.save_order(order, trade_date)
-                attempt = broker.try_fill(order, quote)
-                if hasattr(self.store, "save_order"):
-                    self.store.save_order(attempt.order, trade_date)
-                if attempt.fill is None:
-                    raise PaperBrokerError(attempt.order.rejected_reason or "订单尚未成交。")
-                fill = attempt.fill
+                order = replace(risk_result.order, asset_type=instrument.asset_type)
+                fill = execute_order_state_machine(
+                    broker,
+                    order,
+                    quote,
+                    store=self.store,
+                    trade_date=trade_date,
+                )
             except PaperBrokerError as exc:
                 rejected = Decision(
                     risk_result.order.symbol,
@@ -314,7 +273,7 @@ class RealTimePaperTradingMonitor:
                     aggregate,
                 )
                 decisions.append(rejected)
-                self.store.record_decision(rejected, trade_date)
+                self.store.record_decision(rejected, trade_date, portfolio)
                 continue
             fills.append(fill)
             self.store.record_fill(fill, trade_date)
@@ -378,10 +337,14 @@ class RealTimePaperTradingMonitor:
                 self.store.update_watchlist_lifecycle(instrument.symbol, "dormant", report_date)
 
     def initialize_trading_data(self, trade_date: date | None = None) -> tuple[bool, list[str]]:
-        """Prepare persistent reference data before the monitor may evaluate a strategy."""
+        """Check persisted data readiness without making a historical-data request.
+
+        Historical/reference synchronization is owned by the non-trading-window
+        scheduler.  This method is intentionally read-only so a late monitor
+        start cannot consume AlphaFeed K-line quota during market hours.
+        """
         trade_date = trade_date or datetime.now(self.timezone).date()
-        warnings: list[str] = []
-        warnings.extend(self._sync_watchlist_history(force=False, as_of=trade_date))
+        warnings: list[str] = list(self._initialization_warnings)
         missing = self._symbols_with_insufficient_history()
         if missing:
             warnings.append("观察池历史 K 线未就绪：" + "、".join(missing))
@@ -390,8 +353,6 @@ class RealTimePaperTradingMonitor:
             return False, warnings
         self._initialization_warnings = warnings
         self._trading_data_ready = True
-        self._catalog_sync_attempted_dates.append(trade_date)
-        self._start_background(self._sync_reference_data_in_background, trade_date, False, previous_weekday(trade_date))
         return True, warnings
 
     def run_forever(
@@ -408,45 +369,91 @@ class RealTimePaperTradingMonitor:
         try:
             while max_iterations is None or iteration < max_iterations:
                 local_now = self._local_now(now_fn() if now_fn else None)
+                if is_daily_kline_window(local_now):
+                    self._schedule_daily_kline_sync(local_now)
                 scheduled = self._run_scheduled_task(local_now)
                 if scheduled is not None:
                     result = scheduled
                 elif self._report_is_due(local_now) and local_now.date() not in self._reported_dates:
-                    report = self.generate_post_close_report(local_now.date())
-                    self._start_background(self._sync_reference_data_in_background, local_now.date(), True)
-                    self._start_background(self._run_automatic_backtest, local_now.date())
+                    report = None
+                    report_warnings: list[str] = []
+                    report_started_at = datetime.now(self.timezone)
+                    try:
+                        report = self.generate_post_close_report(local_now.date())
+                        if hasattr(self.store, "save_data_task_status"):
+                            self.store.save_data_task_status(
+                                "daily_report",
+                                local_now.date(),
+                                "success",
+                                1,
+                                0,
+                                "",
+                                report_started_at,
+                                datetime.now(self.timezone),
+                            )
+                    except Exception as exc:  # noqa: BLE001 - report failure must not stop monitoring
+                        report_warnings.append(f"日报生成失败：{exc}")
+                        if hasattr(self.store, "save_data_task_status"):
+                            self.store.save_data_task_status(
+                                "daily_report",
+                                local_now.date(),
+                                "failed",
+                                0,
+                                1,
+                                str(exc),
+                                report_started_at,
+                                datetime.now(self.timezone),
+                            )
+                    self._automatic_backtest_pending_dates.add(local_now.date())
+                    self._maybe_start_automatic_backtest(local_now.date())
                     portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
-                    result = MonitorIterationResult("reported", "收盘日报已归档到数据库。", portfolio, [], [], report)
-                    self._reported_dates.append(local_now.date())
-                elif self.config.monitor.respect_market_hours and not ignore_market_hours and not self._is_active_monitor_window(local_now):
-                    portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
-                    result = MonitorIterationResult("sleeping", "非交易时段，monitor 进入休眠。", portfolio, [], [])
-                elif not self._trading_data_ready:
-                    ready, warnings = self.initialize_trading_data(local_now.date())
+                    result = MonitorIterationResult(
+                        "reported" if report is not None else "degraded",
+                        "收盘日报已归档到数据库。" if report is not None else "收盘日报生成失败，已记录告警并继续运行。",
+                        portfolio,
+                        [],
+                        [],
+                        report,
+                        report_warnings,
+                    )
+                    if report is not None:
+                        self._reported_dates.append(local_now.date())
+                elif ignore_market_hours:
+                    if not self._trading_data_ready:
+                        ready, warnings = self.initialize_trading_data(local_now.date())
+                    else:
+                        ready, warnings = True, self._initialization_warnings
                     if not ready:
                         portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
-                        result = MonitorIterationResult(
-                            "initializing",
-                            "交易数据尚未就绪，本轮不执行策略；monitor 将自动重试。",
-                            portfolio,
-                            [],
-                            [],
-                            warnings=warnings,
-                        )
+                        result = MonitorIterationResult("initializing", "交易数据尚未就绪，本轮不执行策略；monitor 将自动重试。", portfolio, [], [], warnings=warnings)
                     else:
-                        result = self.run_iteration(local_now, ignore_market_hours=ignore_market_hours)
-                        if warnings:
-                            result = MonitorIterationResult(
-                                "degraded",
-                                result.message + " 启动数据存在非阻断告警。",
-                                result.portfolio,
-                                result.decisions,
-                                result.fills,
-                                result.report,
-                                [*warnings, *result.warnings],
-                            )
+                        result = self.run_iteration(local_now, ignore_market_hours=True)
+                        self._last_strategy_run_at = local_now
+                elif is_realtime_collection_time(local_now, self._is_trading_day):
+                    quotes = self.collect_realtime_quotes(local_now)
+                    if is_strategy_time(local_now, self._is_trading_day) and self._strategy_is_due(local_now):
+                        if not self._trading_data_ready:
+                            ready, warnings = self.initialize_trading_data(local_now.date())
+                        else:
+                            ready, warnings = True, self._initialization_warnings
+                        if not ready:
+                            portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
+                            result = MonitorIterationResult("initializing", "交易数据尚未就绪，本轮不执行策略；monitor 将自动重试。", portfolio, [], [], warnings=warnings)
+                        else:
+                            result = self.run_iteration(local_now, preloaded_quotes=quotes)
+                            self._last_strategy_run_at = local_now
+                            if warnings:
+                                result = replace(result, status="degraded", warnings=[*warnings, *result.warnings], message=result.message + " 启动数据存在非阻断告警。")
+                    else:
+                        portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
+                        result = MonitorIterationResult("quoted", "已完成实时行情采集，等待下一次策略评估。", portfolio, [], [])
+                elif is_daily_kline_window(local_now):
+                    self._schedule_daily_kline_sync(local_now)
+                    portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
+                    result = MonitorIterationResult("sleeping", "非交易时段，monitor 保持低频唤醒并同步日 K。", portfolio, [], [])
                 else:
-                    result = self.run_iteration(local_now, ignore_market_hours=ignore_market_hours)
+                    portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
+                    result = MonitorIterationResult("sleeping", "非交易时段，monitor 进入休眠。", portfolio, [], [])
                 if on_update:
                     on_update(result)
                 iteration += 1
@@ -457,23 +464,21 @@ class RealTimePaperTradingMonitor:
             self.store.release_monitor_lock()
 
     def _sleep_seconds(self, now: datetime) -> float:
-        """Sleep until the next actionable boundary; no off-hours polling."""
+        """Sleep at the quote cadence in-session and otherwise until a boundary."""
         if not self.config.monitor.respect_market_hours:
             return float(self.config.monitor.poll_seconds)
-        if is_trading_time(now, self._is_trading_day):
-            return float(self.config.monitor.poll_seconds)
+        if is_realtime_collection_time(now, self._is_trading_day):
+            return max(1.0, float(self.config.monitor.quote_poll_seconds))
         local_time = now.timetz().replace(tzinfo=None)
         if self._is_trading_day(now.date()):
-            if local_time < clock_time(9, 5):
-                target = datetime.combine(now.date(), clock_time(9, 5), tzinfo=now.tzinfo)
-            elif local_time < clock_time(9, 25):
-                target = datetime.combine(now.date(), clock_time(9, 25), tzinfo=now.tzinfo)
-            elif local_time < clock_time(9, 30):
-                target = datetime.combine(now.date(), clock_time(9, 30), tzinfo=now.tzinfo)
+            if local_time < clock_time(8, 30):
+                target = datetime.combine(now.date(), clock_time(8, 30), tzinfo=now.tzinfo)
+            elif local_time < clock_time(9, 15):
+                target = datetime.combine(now.date(), clock_time(9, 15), tzinfo=now.tzinfo)
             elif local_time < clock_time(13, 0):
                 target = datetime.combine(now.date(), clock_time(13, 0), tzinfo=now.tzinfo)
-            elif local_time < clock_time(15, 5):
-                target = datetime.combine(now.date(), clock_time(15, 5), tzinfo=now.tzinfo)
+            elif local_time < clock_time(15, 30):
+                target = datetime.combine(now.date(), clock_time(15, 30), tzinfo=now.tzinfo)
             elif local_time < clock_time(19, 0):
                 target = datetime.combine(now.date(), clock_time(19, 0), tzinfo=now.tzinfo)
             elif local_time < clock_time(19, 30):
@@ -485,11 +490,76 @@ class RealTimePaperTradingMonitor:
         return max(1.0, (target - now).total_seconds())
 
     def _is_active_monitor_window(self, now: datetime) -> bool:
-        """Allow the 09:05 initialization window and both trading sessions."""
-        if not self._is_trading_day(now.date()):
-            return False
+        return is_realtime_collection_time(now, self._is_trading_day)
+
+    def _strategy_is_due(self, now: datetime) -> bool:
+        if self._last_strategy_run_at is None:
+            return True
+        return (now - self._last_strategy_run_at).total_seconds() >= max(1, self.config.monitor.poll_seconds)
+
+    def collect_realtime_quotes(self, now: datetime | None = None) -> dict[str, object]:
+        """Collect and persist the latest snapshot for active A-share symbols only."""
+        local_now = self._local_now(now)
+        if self.config.monitor.respect_market_hours and not is_realtime_collection_time(local_now, self._is_trading_day):
+            return {}
+        self._prepare_intraday_quote_store(local_now)
+        symbols = [
+            item.symbol
+            for item in effective_watchlist(self.config, self.store)
+            if item.lifecycle_status not in {"dormant", "removed"}
+        ]
+        if not symbols:
+            return {}
+        try:
+            quotes = fetch_quotes(self.quote_provider, symbols)
+        except Exception as exc:  # noqa: BLE001 - one failed source must not stop the scheduler
+            logger.warning("实时行情采集失败（%s）：%s", local_now.isoformat(), exc)
+            return {}
+        if quotes:
+            self.store.save_quotes(list(quotes.values()))
+        return quotes
+
+    def _schedule_daily_kline_sync(self, now: datetime) -> None:
+        completed_date = self._completed_trading_date(now)
+        window = "after_close" if now.timetz().replace(tzinfo=None) >= clock_time(15, 30) else "preopen"
+        key = (completed_date, window)
+        if key in self._daily_kline_sync_attempted_windows:
+            return
+        self._daily_kline_sync_attempted_windows.add(key)
+        self._start_background(self._run_daily_kline_sync, completed_date)
+
+    def _run_daily_kline_sync(self, completed_date: date) -> None:
+        success = self._sync_reference_data_in_background(completed_date, True, completed_date)
+        us_result = self._sync_external_us(completed_date)
+        if us_result.get("failure_count"):
+            success = False
+            logger.warning("美股外围数据有 %s 个标的失败（%s）", us_result["failure_count"], completed_date.isoformat())
+        try:
+            korea_rows = fetch_korea_market_data()
+            self.store.save_overseas_market_data(korea_rows)
+        except Exception as exc:  # noqa: BLE001 - external daily data is fail-closed for dependent strategies
+            success = False
+            logger.warning("韩股外围数据同步失败（%s）：%s", completed_date.isoformat(), exc)
+        if success:
+            self._daily_kline_completed_dates.add(completed_date)
+            self._maybe_start_automatic_backtest(completed_date)
+
+    def _maybe_start_automatic_backtest(self, trade_date: date) -> None:
+        if trade_date not in self._automatic_backtest_pending_dates or trade_date not in self._daily_kline_completed_dates:
+            return
+        self._automatic_backtest_pending_dates.discard(trade_date)
+        if trade_date not in self._automatic_backtest_started_dates:
+            self._automatic_backtest_started_dates.append(trade_date)
+            self._start_background(self._run_automatic_backtest, trade_date)
+
+    def _completed_trading_date(self, now: datetime) -> date:
+        candidate = now.date()
         local_time = now.timetz().replace(tzinfo=None)
-        return clock_time(9, 5) <= local_time <= clock_time(15, 0)
+        if local_time < clock_time(9, 0) or not self._is_trading_day(candidate):
+            candidate -= timedelta(days=1)
+        while not self._is_trading_day(candidate):
+            candidate -= timedelta(days=1)
+        return candidate
 
     def _report_is_due(self, now: datetime) -> bool:
         hour, minute = [int(part) for part in self.config.monitor.post_close_report_time.split(":", 1)]
@@ -501,7 +571,7 @@ class RealTimePaperTradingMonitor:
             return None
         local_time, day = now.timetz().replace(tzinfo=None), now.date()
         task = None
-        if clock_time(9, 5) <= local_time < clock_time(9, 25):
+        if clock_time(8, 30) <= local_time < clock_time(9, 0):
             task = "premarket"
         elif clock_time(9, 25) <= local_time < clock_time(9, 30):
             task = "auction_check"
@@ -514,23 +584,18 @@ class RealTimePaperTradingMonitor:
         self._scheduled_task_dates.add((day, task))
         warnings: list[str] = []
         completed: list[str] = []
+        retry_task = False
+        task_started_at = datetime.now(self.timezone)
         try:
             if task == "premarket":
                 self._prepare_intraday_quote_store(now)
-                self.store.save_overseas_market_data(fetch_us_market_data())
-                self.store.save_overseas_market_data(fetch_korea_market_data())
-                completed.append("外围市场数据")
+                completed.append("交易前行情存储已准备")
             elif task == "auction_check":
                 completed.append("集合竞价条件将在 09:30 首轮行情中使用")
             elif task == "postmarket_lhb":
                 self.store.save_lhb_records(fetch_lhb_data(day))
                 refresh_lhb_seat_profiles(self.store)
                 completed.append("龙虎榜数据")
-                self.generate_post_close_report(day)
-                if day not in self._reported_dates:
-                    self._reported_dates.append(day)
-                    self._start_background(self._run_automatic_backtest, day)
-                    completed.append("日报与自动回测")
             elif task == "postmarket_futures":
                 rows = fetch_futures_positions(day)
                 if rows:
@@ -539,16 +604,57 @@ class RealTimePaperTradingMonitor:
                 else:
                     warnings.append("期指持仓接口未返回可校验的 IC 前十持仓，策略将保持失效。")
         except Exception as exc:  # noqa: BLE001
+            retry_task = True
             warnings.append(f"{task} 失败：{exc}")
         portfolio = self.store.load_portfolio(self.config.paper_account.initial_cash)
+        if hasattr(self.store, "save_data_task_status"):
+            try:
+                self.store.save_data_task_status(
+                    task,
+                    day,
+                    "failed" if retry_task and not completed else "degraded" if warnings else "success",
+                    len(completed),
+                    len(warnings),
+                    "；".join(warnings),
+                    task_started_at,
+                    datetime.now(self.timezone),
+                )
+            except Exception as exc:  # noqa: BLE001 - status persistence must not stop the monitor
+                logger.warning("任务状态写入失败（%s）：%s", task, exc)
+        if retry_task:
+            self._scheduled_task_dates.discard((day, task))
         return MonitorIterationResult("scheduled" if not warnings else "degraded", "；".join(completed) or f"{task} 未完成", portfolio, [], [], warnings=warnings)
 
     def _run_automatic_backtest(self, trade_date: date) -> None:
         """Backtests create pending candidates only; they never alter an active profile."""
-        del trade_date
         from .app import optimize_strategy_from_store
-
-        optimize_strategy_from_store(self.config, self.store)
+        started_at = datetime.now(self.timezone)
+        try:
+            optimize_strategy_from_store(self.config, self.store)
+            if hasattr(self.store, "save_data_task_status"):
+                self.store.save_data_task_status(
+                    "automatic_backtest",
+                    trade_date,
+                    "success",
+                    1,
+                    0,
+                    "",
+                    started_at,
+                    datetime.now(self.timezone),
+                )
+        except Exception as exc:  # noqa: BLE001 - background failure is persisted and isolated
+            if hasattr(self.store, "save_data_task_status"):
+                self.store.save_data_task_status(
+                    "automatic_backtest",
+                    trade_date,
+                    "failed",
+                    0,
+                    1,
+                    str(exc),
+                    started_at,
+                    datetime.now(self.timezone),
+                )
+            raise
 
     def _next_trading_open(self, current: date, timezone) -> datetime:
         candidate = current + timedelta(days=1)
@@ -561,12 +667,6 @@ class RealTimePaperTradingMonitor:
         if current.tzinfo is None:
             return current.replace(tzinfo=self.timezone)
         return current.astimezone(self.timezone)
-
-    def _sync_daily_reference_data(self, trade_date: date) -> None:
-        if trade_date in self._catalog_sync_attempted_dates:
-            return
-        self._catalog_sync_attempted_dates.append(trade_date)
-        self._start_background(self._sync_catalog_in_background, trade_date)
 
     def _start_background(self, func: Callable, *args) -> None:
         Thread(target=self._safe_background_task, args=(func, *args), daemon=True).start()
@@ -582,6 +682,21 @@ class RealTimePaperTradingMonitor:
             return
         self._decision_compaction_attempted_dates.append(trade_date)
         self.store.compact_watch_decisions()
+        full_history_compaction = False
+        if hasattr(self.store, "compact_decision_events"):
+            if not self._decision_history_compaction_done:
+                removed = self.store.compact_decision_events()
+                self._decision_history_compaction_done = True
+                full_history_compaction = True
+            else:
+                removed = self.store.compact_decision_events(trade_date)
+            if removed:
+                scope = "历史" if full_history_compaction else trade_date.isoformat()
+                logger.info("已压缩%s重复业务事件：%s 条", scope, removed)
+        if hasattr(self.store, "purge_decision_events") and self._decision_history_compaction_done:
+            purged = self.store.purge_decision_events(trade_date)
+            if purged:
+                logger.info("已清理过期业务事件：%s 条", purged)
 
     def _prepare_intraday_quote_store(self, local_now: datetime) -> None:
         """Discard the previous trading day's snapshots before a new A-share session."""
@@ -598,80 +713,62 @@ class RealTimePaperTradingMonitor:
             except Exception as exc:  # noqa: BLE001 - background refresh must not stop trading
                 logger.warning("证券目录同步失败（%s）：%s", trade_date.isoformat(), exc)
 
+    def _sync_external_us(self, trade_date: date) -> dict:
+        def fallback(spec):
+            rows = fetch_us_market_data((spec.canonical_symbol,))
+            return rows[0] if rows else None
+
+        try:
+            return sync_external_market_data(
+                self.store,
+                self.external_history_provider,
+                DEFAULT_US_SPECS,
+                as_of=trade_date,
+                fallback_fetcher=fallback,
+                now_fn=lambda: datetime.now(self.timezone),
+            )
+        except Exception as exc:  # noqa: BLE001 - status is returned to monitor, not raised
+            logger.warning("美股外围数据同步失败（%s）：%s", trade_date.isoformat(), exc)
+            return {"success_count": 0, "skipped_count": 0, "failure_count": len(DEFAULT_US_SPECS), "failures": [{"symbol": "*", "reason": str(exc)}]}
+
     def _sync_reference_data_in_background(
         self,
         trade_date: date,
         refresh_history: bool = True,
         history_as_of: date | None = None,
-    ) -> None:
-        """Reference data must not delay a market-hours trading iteration."""
+    ) -> bool:
+        """Synchronize all non-snapshot data inside the daily K-line window."""
+        success = True
         self._sync_catalog_in_background(trade_date)
         history_as_of = history_as_of or trade_date
         if refresh_history:
             try:
                 self._sync_watchlist_history(force=True, as_of=history_as_of)
             except Exception as exc:  # noqa: BLE001 - retry occurs on the next scheduled refresh
+                success = False
                 logger.warning("观察池历史同步失败（%s）：%s", trade_date.isoformat(), exc)
         try:
             sync_benchmark_history(self.config, self.store, self.history_provider, as_of=history_as_of)
         except Exception as exc:  # noqa: BLE001 - benchmark failure is non-blocking but observable
+            success = False
             logger.warning("基准指数历史同步失败（%s）：%s", trade_date.isoformat(), exc)
+        try:
+            sync_sector_mappings(self.config, self.store, as_of=trade_date)
+        except Exception as exc:  # noqa: BLE001 - missing sector data degrades only external strategies
+            success = False
+            logger.warning("板块映射同步失败（%s）：%s", trade_date.isoformat(), exc)
+        return success
 
     def _sync_watchlist_history(self, force: bool, as_of: date | None = None) -> list[str]:
-        history = self.config.data.history
-        interval = str(history.get("interval", "daily"))
-        start = str(history.get("start", "20240101"))
-        end = str(history.get("end", "20500101"))
-        adjust = str(history.get("adjust", "qfq"))
-        minimum = int(history.get("monitor_minimum_bars", 35))
-        warnings: list[str] = []
-        instruments = effective_watchlist(self.config, self.store)
-        candidates = [
-            instrument
-            for instrument in instruments
-            if force or len(self.store.load_bars(instrument.symbol, interval=interval, limit=minimum)) < minimum
-        ]
-        if not candidates:
-            return warnings
-        for instrument in candidates:
-            try:
-                existing = self.store.load_bars(instrument.symbol, interval=interval, limit=minimum)
-                if not force and len(existing) < minimum:
-                    range_to_sync = (start, min(str(as_of or date.today()).replace("-", ""), end))
-                else:
-                    range_to_sync = missing_history_range(
-                        self.store,
-                        instrument.symbol,
-                        interval,
-                        start,
-                        end,
-                        as_of,
-                    )
-                if range_to_sync is None:
-                    continue
-                sync_start, sync_end = range_to_sync
-                qfq_bars = self.history_provider.get_bars(
-                    instrument.symbol,
-                    interval=interval,
-                    start=sync_start,
-                    end=sync_end,
-                    adjust=adjust,
-                )
-                raw_bars = self.history_provider.get_bars(
-                    instrument.symbol,
-                    interval=interval,
-                    start=sync_start,
-                    end=sync_end,
-                    adjust="",
-                )
-                source = getattr(self.history_provider, "last_source", "") or self.config.data.history_provider
-                if hasattr(self.store, "save_price_tracks"):
-                    self.store.save_price_tracks(raw_bars, qfq_bars, interval=interval, source=source)
-                else:
-                    self.store.save_bars(qfq_bars, interval=interval, source=source)
-            except Exception as exc:  # noqa: BLE001 - retry is handled by the monitor lifecycle
-                warnings.append(f"{instrument.symbol} 历史 K 线同步失败：{exc}")
-        return warnings
+        result = sync_watchlist_history(
+            self.config,
+            self.store,
+            self.history_provider,
+            as_of=as_of,
+            force=force,
+            only_incomplete=True,
+        )
+        return result.warnings
 
     def _symbols_with_insufficient_history(self) -> list[str]:
         interval = str(self.config.data.history.get("interval", "daily"))
@@ -681,6 +778,24 @@ class RealTimePaperTradingMonitor:
             for instrument in effective_watchlist(self.config, self.store)
             if len(self.store.load_bars(instrument.symbol, interval=interval, limit=minimum)) < minimum
         ]
+
+
+def is_realtime_collection_time(now: datetime, trading_day_checker: Callable[[date], bool] | None = None) -> bool:
+    """A-share snapshot window, including the 09:15-09:30 auction period."""
+    local_time = now.timetz().replace(tzinfo=None)
+    if not (trading_day_checker or (lambda value: value.weekday() < 5))(now.date()):
+        return False
+    return (clock_time(9, 15) <= local_time <= clock_time(11, 30)) or (clock_time(13, 0) <= local_time <= clock_time(15, 0))
+
+
+def is_strategy_time(now: datetime, trading_day_checker: Callable[[date], bool] | None = None) -> bool:
+    return is_trading_time(now, trading_day_checker)
+
+
+def is_daily_kline_window(now: datetime) -> bool:
+    """Daily K-line synchronization window: 15:30-24:00 and 00:00-09:00."""
+    local_time = now.timetz().replace(tzinfo=None)
+    return local_time >= clock_time(15, 30) or local_time < clock_time(9, 0)
 
 
 def is_trading_time(now: datetime, trading_day_checker: Callable[[date], bool] | None = None) -> bool:

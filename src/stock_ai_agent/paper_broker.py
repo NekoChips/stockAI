@@ -100,14 +100,15 @@ class PaperBroker:
         return FillAttempt(updated, fill)
 
     def execute(self, order: PaperOrder, quote: Quote | None = None) -> Fill:
-        """Compatibility shortcut for one-shot simulations."""
+        """Compatibility shortcut backed by the canonical order state machine."""
         if quote is None:
             now = datetime.now(timezone.utc)
             quote = Quote(order.symbol, order.symbol, now, order.requested_price, order.requested_price, order.requested_price, order.requested_price, order.requested_price, Decimal("0"), Decimal("0"), Decimal("0"), "order", now, bid_price=order.requested_price, ask_price=order.requested_price)
-        attempt = self.try_fill(self.submit(self.approve(self.create(order))), quote)
-        if attempt.fill is None:
-            raise PaperBrokerError(attempt.order.rejected_reason or "订单未成交。")
-        return attempt.fill
+        # Keep the historical public method for callers, but make it impossible
+        # for this compatibility path to diverge from monitor/run-once.
+        from .trading_round import execute_order_state_machine
+
+        return execute_order_state_machine(self, order, quote)
 
     def _fill(self, order: PaperOrder, quote: Quote, quantity: int) -> Fill:
         is_buy = order.direction in {Direction.BUY, Direction.ADD}
