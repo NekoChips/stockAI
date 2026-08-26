@@ -4,9 +4,10 @@ import { fmtMoney, fmtPct, toneClass } from '@/utils/format';
 
 interface AccountStripProps {
   data: OverviewPayload;
+  dataUpdatedAt?: number;
 }
 
-export function AccountStrip({ data }: AccountStripProps) {
+export function AccountStrip({ data, dataUpdatedAt }: AccountStripProps) {
   const portfolio = data.portfolio ?? {};
   const asset = Number(portfolio.total_asset ?? 0);
   const market = Number(portfolio.total_market_value ?? 0);
@@ -27,7 +28,14 @@ export function AccountStrip({ data }: AccountStripProps) {
   ).length;
   const fillCount = (data.recent_fills ?? []).length;
   const positionCount = (portfolio.positions ?? []).length;
-  const updated = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const updated = dataUpdatedAt
+    ? new Date(dataUpdatedAt).toLocaleTimeString('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      })
+    : '--:--:--';
 
   return (
     <div
