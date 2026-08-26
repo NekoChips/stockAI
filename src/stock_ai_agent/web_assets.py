@@ -19,14 +19,11 @@ def render_spa_index() -> str:
 
 
 def resolve_spa_file(url_path: str) -> Path | None:
-    """Map /app/... URL path to a file under spa_root. Reject path traversal."""
+    """Map URL path to a file under spa_root. Reject path traversal."""
     raw = url_path.split("?", 1)[0]
-    if raw in {"/app", "/app/"}:
+    if raw in {"/", ""}:
         return None
-    prefix = "/app/"
-    if not raw.startswith(prefix):
-        return None
-    relative = raw[len(prefix) :]
+    relative = raw.lstrip("/")
     if not relative or relative.endswith("/"):
         return None
     root = spa_root().resolve()

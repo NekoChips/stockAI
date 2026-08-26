@@ -215,6 +215,64 @@ def build_dashboard_orders_payload(store, limit: int = 100) -> dict[str, Any]:
     return _to_jsonable({"orders": orders})
 
 
+def build_dashboard_decision_events_payload(
+    store,
+    as_of: date | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    as_of = as_of or date.today()
+    limit = max(1, min(int(limit), 500))
+    events: list[dict[str, Any]] = []
+    raw = store.load_decision_events(as_of) if hasattr(store, "load_decision_events") else []
+    for item in raw:
+        phase = item.get("phase") or "decision"
+        events.append(
+            {
+                "type": "order" if phase == "order" else "decision",
+                "event_at": item.get("event_at"),
+                "symbol": item.get("symbol") or "",
+                "direction": item.get("direction") or "",
+                "approved": item.get("approved"),
+                "status": item.get("status"),
+                "reasons": item.get("reasons") or [],
+                "strategy_id": item.get("strategy_id") or None,
+                "order_id": item.get("order_id") or None,
+                "quantity": None,
+                "price": None,
+                "fee": None,
+                "slippage": None,
+                "target_weight": item.get("target_weight"),
+                "phase": phase,
+            }
+        )
+    fills = store.load_fills(as_of) if hasattr(store, "load_fills") else []
+    for fill in fills:
+        ts = fill.timestamp
+        events.append(
+            {
+                "type": "fill",
+                "event_at": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                "symbol": fill.symbol,
+                "direction": fill.direction.value if hasattr(fill.direction, "value") else str(fill.direction),
+                "approved": None,
+                "status": None,
+                "reasons": [],
+                "strategy_id": None,
+                "order_id": fill.order_id or None,
+                "quantity": int(fill.quantity),
+                "price": str(fill.price),
+                "fee": str(fill.fee),
+                "slippage": str(fill.slippage),
+                "target_weight": None,
+                "phase": "fill",
+            }
+        )
+    events.sort(key=lambda e: e.get("event_at") or "")
+    if len(events) > limit:
+        events = events[-limit:]
+    return _to_jsonable({"events": events, "as_of": as_of.isoformat(), "fill_count": len(fills)})
+
+
 def build_dashboard_strategies_payload(config: AppConfig, store) -> dict[str, Any]:
     if hasattr(store, "load_strategy_center"):
         return _to_jsonable({"strategies": store.load_strategy_center(config)})

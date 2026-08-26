@@ -5,7 +5,12 @@ import { CheckCircleOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/i
 
 export const OVERVIEW_POLL_MS = 30_000;
 
-export const DASHBOARD_QUERY_KEYS = [['overview'], ['performance'], ['calendar']] as const;
+export const DASHBOARD_QUERY_KEYS = [
+  ['overview'],
+  ['performance'],
+  ['calendar'],
+  ['decision-events'],
+] as const;
 
 export function invalidateDashboardQueries(queryClient: ReturnType<typeof useQueryClient>) {
   for (const queryKey of DASHBOARD_QUERY_KEYS) {
