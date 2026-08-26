@@ -2,7 +2,41 @@
 
 from pathlib import Path
 
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+
+def spa_root() -> Path:
+    return _PACKAGE_DIR / "spa"
+
 
 def render_dashboard_html() -> str:
-    """Load the bundled dashboard without coupling it to HTTP routing."""
-    return Path(__file__).with_name("dashboard.html").read_text(encoding="utf-8")
+    return (_PACKAGE_DIR / "dashboard.html").read_text(encoding="utf-8")
+
+
+def render_spa_index() -> str:
+    index = spa_root() / "index.html"
+    if not index.is_file():
+        raise FileNotFoundError(f"SPA index missing: {index}")
+    return index.read_text(encoding="utf-8")
+
+
+def resolve_spa_file(url_path: str) -> Path | None:
+    """Map /app/... URL path to a file under spa_root. Reject path traversal."""
+    raw = url_path.split("?", 1)[0]
+    if raw in {"/app", "/app/"}:
+        return None
+    prefix = "/app/"
+    if not raw.startswith(prefix):
+        return None
+    relative = raw[len(prefix) :]
+    if not relative or relative.endswith("/"):
+        return None
+    root = spa_root().resolve()
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate

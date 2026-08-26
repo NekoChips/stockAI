@@ -27,7 +27,7 @@ from .web_dashboard import (
     _query_date,
 )
 from .web_health import build_ready_payload
-from .web_http import BoundedThreadingHTTPServer, PLACEHOLDER_PATTERN, serve_dashboard
+from .web_http import BoundedThreadingHTTPServer, PLACEHOLDER_PATTERN, create_dashboard_server, serve_dashboard
 from .web_support import MAX_BODY_SIZE, TTLCache, _send, _send_error, _to_jsonable
 
 
@@ -51,6 +51,7 @@ __all__ = [
     "confirm_backtest_runs",
     "confirm_dashboard_strategy_profile",
     "confirm_dashboard_risk_config",
+    "create_dashboard_server",
     "remove_dashboard_watchlist_item",
     "save_dashboard_strategy_profile",
     "save_dashboard_risk_config",
