@@ -35,7 +35,7 @@ env/
 data/*.sqlite3
 data/*.sqlite3-*
 data/backups/
-reports/
+/reports/
 .learnings/
 
 # Deployment-only configuration and credentials
@@ -43,3 +43,11 @@ config/*.local.yaml
 config/*.secret.yaml
 docker/.env.release
 dist/
+
+src/stock_ai_agent/spa/**
+!src/stock_ai_agent/spa/.gitkeep
+frontend/node_modules/
+frontend/dist/
+
+.worktrees/
+.superpowers/

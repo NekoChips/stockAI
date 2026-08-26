@@ -28,7 +28,7 @@ from .web_actions import (
     set_dashboard_watchlist_trading,
     search_watchlist_instruments,
 )
-from .web_assets import render_dashboard_html
+from .web_assets import render_dashboard_html, render_spa_index, resolve_spa_file
 from .web_dashboard import (
     build_dashboard_backtests_payload,
     build_dashboard_orders_payload,
@@ -75,7 +75,7 @@ class BoundedThreadingHTTPServer(HTTPServer):
         self._executor.shutdown(wait=True)
 
 
-def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int = 8765) -> BoundedThreadingHTTPServer:
+def _build_dashboard_handler(config: AppConfig, store):
     class DashboardHandler(BaseHTTPRequestHandler):
         def _authorized(self) -> bool:
             if not config.web.require_basic_auth:
@@ -139,6 +139,34 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
                 _send(self, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode("utf-8"), status)
                 return
             if not self._require_authorization():
+                return
+            if request.path == "/app" or request.path.startswith("/app/"):
+                asset = resolve_spa_file(request.path)
+                if asset is not None:
+                    content_type = "application/octet-stream"
+                    suffix = asset.suffix.lower()
+                    if suffix == ".html":
+                        content_type = "text/html; charset=utf-8"
+                    elif suffix == ".js":
+                        content_type = "application/javascript; charset=utf-8"
+                    elif suffix == ".css":
+                        content_type = "text/css; charset=utf-8"
+                    elif suffix == ".svg":
+                        content_type = "image/svg+xml"
+                    elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+                        content_type = f"image/{suffix.lstrip('.')}"
+                    elif suffix == ".json":
+                        content_type = "application/json; charset=utf-8"
+                    elif suffix == ".woff2":
+                        content_type = "font/woff2"
+                    _send(self, content_type, asset.read_bytes())
+                    return
+                try:
+                    html = render_spa_index()
+                except FileNotFoundError:
+                    _send_error(self, 503, "SPA 尚未构建。请在 frontend/ 执行 npm run build，或使用包含前端构建阶段的 Docker 镜像。")
+                    return
+                _send(self, "text/html; charset=utf-8", html.encode("utf-8"))
                 return
             if request.path == "/":
                 _send(self, "text/html; charset=utf-8", render_dashboard_html().encode("utf-8"))
@@ -356,6 +384,21 @@ def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int
         def log_message(self, fmt: str, *args) -> None:
             return
 
-    server = BoundedThreadingHTTPServer((host, port), DashboardHandler)
+    return DashboardHandler
+
+
+def create_dashboard_server(
+    config: AppConfig,
+    store,
+    host: str = "127.0.0.1",
+    port: int = 0,
+) -> BoundedThreadingHTTPServer:
+    """Bind a dashboard server without calling serve_forever (for tests)."""
+    handler = _build_dashboard_handler(config, store)
+    return BoundedThreadingHTTPServer((host, port), handler)
+
+
+def serve_dashboard(config: AppConfig, store, host: str = "127.0.0.1", port: int = 8765) -> BoundedThreadingHTTPServer:
+    server = create_dashboard_server(config, store, host=host, port=port)
     server.serve_forever()
     return server
