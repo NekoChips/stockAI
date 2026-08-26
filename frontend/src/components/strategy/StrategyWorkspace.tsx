@@ -26,8 +26,11 @@ import {
   confirmStrategyProfile,
   discardStrategyDraft,
   fetchStrategies,
+  fetchStrategyReadiness,
   saveStrategyProfile,
 } from '@/api/strategies';
+import { fetchOverview } from '@/api/dashboard';
+import { StrategyReadinessPanel } from './StrategyReadinessPanel';
 import { useUiStore } from '@/stores/uiStore';
 import type {
   ProfileDiffEntry,
@@ -194,6 +197,7 @@ function StrategyMembers({
 export function StrategyWorkspace() {
   const [selectedProfileId, setSelectedProfileId] = useState('default');
   const [localProfiles, setLocalProfiles] = useState<StrategyProfile[] | null>(null);
+  const [readinessSymbol, setReadinessSymbol] = useState('');
   const [form] = Form.useForm<ProfileFormValues>();
   const enabledIds = Form.useWatch('enabled', form) ?? [];
   const queryClient = useQueryClient();
@@ -202,6 +206,19 @@ export function StrategyWorkspace() {
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['strategies'],
     queryFn: ({ signal }) => fetchStrategies(signal),
+  });
+
+  const { data: overview } = useQuery({
+    queryKey: ['overview'],
+    queryFn: ({ signal }) => fetchOverview(signal),
+    staleTime: 30_000,
+  });
+  const watchlist = overview?.watchlist ?? [];
+  const readinessQuery = useQuery({
+    queryKey: ['strategy-readiness', readinessSymbol],
+    queryFn: ({ signal }) => fetchStrategyReadiness(readinessSymbol, signal),
+    enabled: Boolean(readinessSymbol),
+    staleTime: 30_000,
   });
 
   const center = data?.strategies;
@@ -228,9 +245,17 @@ export function StrategyWorkspace() {
     }
   }, [profile, form]);
 
+  useEffect(() => {
+    if (watchlist.length && !watchlist.some((item) => item.symbol === readinessSymbol)) {
+      setReadinessSymbol(watchlist[0].symbol);
+    }
+  }, [readinessSymbol, watchlist]);
+
   const invalidate = () => {
     setLocalProfiles(null);
     void queryClient.invalidateQueries({ queryKey: ['strategies'] });
+    void queryClient.invalidateQueries({ queryKey: ['strategy-readiness'] });
+    void queryClient.invalidateQueries({ queryKey: ['overview'] });
   };
 
   const saveMutation = useMutation({
@@ -330,6 +355,17 @@ export function StrategyWorkspace() {
             刷新策略
           </Button>
         </Space>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <StrategyReadinessPanel
+          watchlist={watchlist}
+          selectedSymbol={readinessSymbol || watchlist[0]?.symbol}
+          onSymbolChange={setReadinessSymbol}
+          data={readinessQuery.data}
+          loading={readinessQuery.isLoading || readinessQuery.isFetching}
+          error={readinessQuery.error instanceof Error ? readinessQuery.error : null}
+        />
       </div>
 
       <Row gutter={[1, 16]} className="strategy-list-shell">

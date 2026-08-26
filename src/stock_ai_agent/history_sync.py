@@ -1,7 +1,21 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from typing import Any
+
+from .watchlist import effective_watchlist
+
+
+@dataclass(frozen=True)
+class HistorySyncResult:
+    counts: dict[str, int] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    attempted: int = 0
+
+    @property
+    def synced_count(self) -> int:
+        return sum(1 for value in self.counts.values() if value > 0)
 
 
 def compact_date(value: str | date) -> date:
@@ -41,3 +55,65 @@ def missing_history_range(
     if start_date > end_date:
         return None
     return date_code(start_date), date_code(end_date)
+
+
+def sync_watchlist_history(
+    config: Any,
+    store: Any,
+    adapter: Any,
+    *,
+    as_of: date | None = None,
+    force: bool = False,
+    only_incomplete: bool = False,
+) -> HistorySyncResult:
+    """Synchronize the effective watchlist through one shared history path."""
+    history = config.data.history
+    interval = str(history.get("interval", "daily"))
+    start = str(history.get("start", "20240101"))
+    end = str(history.get("end", "20500101"))
+    adjust = str(history.get("adjust", "qfq"))
+    minimum = int(history.get("monitor_minimum_bars", 35))
+    report_date = as_of or date.today()
+    instruments = effective_watchlist(config, store)
+    candidates = [
+        instrument
+        for instrument in instruments
+        if force or not only_incomplete or len(store.load_bars(instrument.symbol, interval=interval, limit=minimum)) < minimum
+    ]
+    counts: dict[str, int] = {}
+    warnings: list[str] = []
+    started_at = datetime.now()
+    for instrument in candidates:
+        try:
+            existing = store.load_bars(instrument.symbol, interval=interval, limit=minimum)
+            if not force and len(existing) < minimum:
+                range_to_sync = (start, min(date_code(report_date), end))
+            else:
+                range_to_sync = missing_history_range(store, instrument.symbol, interval, start, end, as_of)
+            if range_to_sync is None:
+                counts[instrument.symbol] = 0
+                continue
+            sync_start, sync_end = range_to_sync
+            qfq_bars = adapter.get_bars(instrument.symbol, interval=interval, start=sync_start, end=sync_end, adjust=adjust)
+            raw_bars = adapter.get_bars(instrument.symbol, interval=interval, start=sync_start, end=sync_end, adjust="")
+            source = getattr(adapter, "last_source", "") or config.data.history_provider
+            if hasattr(store, "save_price_tracks"):
+                counts[instrument.symbol] = store.save_price_tracks(raw_bars, qfq_bars, interval=interval, source=source)
+            else:
+                counts[instrument.symbol] = store.save_bars(qfq_bars, interval=interval, source=source)
+        except Exception as exc:  # noqa: BLE001 - isolate one provider failure per symbol
+            counts[instrument.symbol] = 0
+            warnings.append(f"{instrument.symbol} 历史 K 线同步失败：{exc}")
+    if hasattr(store, "save_data_task_status"):
+        finished_at = datetime.now()
+        store.save_data_task_status(
+            "watchlist_history",
+            report_date,
+            "success" if not warnings else "degraded",
+            sum(1 for value in counts.values() if value > 0),
+            len(warnings),
+            "；".join(warnings) or ("无缺失历史数据。" if not candidates else ""),
+            started_at,
+            finished_at,
+        )
+    return HistorySyncResult(counts, warnings, len(candidates))

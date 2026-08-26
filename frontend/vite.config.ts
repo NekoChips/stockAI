@@ -19,5 +19,19 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, '../src/stock_ai_agent/spa'),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+
+          if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/react-router')) {
+            return 'react-vendor';
+          }
+          if (id.includes('/@tanstack/')) return 'query-vendor';
+          if (id.includes('/dayjs/')) return 'dayjs-vendor';
+          return undefined;
+        },
+      },
+    },
   },
 });

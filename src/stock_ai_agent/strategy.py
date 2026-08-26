@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Dict, Iterable, List
 
-from .models import Direction, FeatureSet, StrategySignal
+from .models import Direction, FeatureSet, StrategyDataStatus, StrategySignal
 
 
 @dataclass(frozen=True)
@@ -164,7 +164,6 @@ def aggregate_signals(
     signal_list = list(signals)
     if not signal_list:
         raise ValueError("缺少策略信号，无法聚合")
-    configured_weights = weights
     weights = weights or {}
     legacy_aggregation = aggregator is None
     aggregator = aggregator or {}
@@ -183,17 +182,23 @@ def aggregate_signals(
     positive = 0
     negative = 0
     effective_weight = Decimal("0")
-    configured_total = sum((Decimal(str(value)) for value in weights.values() if Decimal(str(value)) > 0), Decimal("0")) if configured_weights is not None else Decimal("0")
-
+    participating: List[str] = []
+    excluded: List[str] = []
+    configured_weights: Dict[str, Decimal] = {}
     for signal in signal_list:
-        weight = Decimal(str(Decimal("1") if configured_weights is None else weights.get(signal.strategy_id, Decimal("0"))))
+        weight = Decimal(str(Decimal("1") if not weights else weights.get(signal.strategy_id, Decimal("0"))))
         if weight <= 0:
             continue
-        if signal.direction == Direction.WATCH:
+        configured_weights[signal.strategy_id] = weight
+        if signal.data_status in {StrategyDataStatus.UNAVAILABLE, StrategyDataStatus.INVALID}:
+            excluded.append(signal.strategy_id)
             objections.extend([f"{signal.strategy_id}: {item}" for item in signal.objections])
+            if signal.data_status_reason and signal.data_status_reason not in signal.objections:
+                objections.append(f"{signal.strategy_id}: {signal.data_status_reason}")
             continue
         effective_weight += weight
         total_weight += weight
+        participating.append(signal.strategy_id)
         normalized_score = signal.score if legacy_aggregation else max(
             Decimal("-1"), min(Decimal("1"), signal.score / score_scale if score_scale > 0 else signal.score)
         )
@@ -216,7 +221,7 @@ def aggregate_signals(
     if risk_caps:
         target_weight = min([target_weight, *risk_caps])
 
-    if configured_weights is not None and (not total_weight or effective_weight < configured_total * Decimal("0.60")):
+    if not total_weight:
         return StrategySignal(
             "strategy_aggregator",
             symbol,
@@ -225,8 +230,14 @@ def aggregate_signals(
             Decimal("0"),
             target_weight,
             evidence,
-            objections or ["有效策略权重不足 60%，本轮策略失效。"],
-            "策略数据缺失导致有效权重不足，本轮禁止交易。",
+            objections or ["没有可参与聚合的策略，本轮保持观望。"],
+            "所有启用策略均不可用，本轮保持观望。",
+            data_status=StrategyDataStatus.UNAVAILABLE,
+            data_status_reason="所有启用策略均不可用。",
+            participating_strategies=[],
+            excluded_strategies=excluded,
+            configured_weights=configured_weights,
+            normalized_weights={},
         )
     average_score = weighted_score / total_weight if total_weight else Decimal("0")
     if positive and negative:
@@ -244,6 +255,12 @@ def aggregate_signals(
         direction = Direction.HOLD if target_weight > 0 else Direction.WATCH
         explanation = "策略评分中性，暂不主动扩大仓位。"
 
+    status = StrategyDataStatus.NEUTRAL if direction in {Direction.HOLD, Direction.WATCH} and average_score == 0 else StrategyDataStatus.READY
+    normalized_weights = {
+        strategy_id: weight / total_weight
+        for strategy_id, weight in configured_weights.items()
+        if strategy_id in participating and total_weight
+    }
     return StrategySignal(
         strategy_id="strategy_aggregator",
         symbol=symbol,
@@ -259,4 +276,9 @@ def aggregate_signals(
         objections=objections,
         explanation=explanation,
         version="v1",
+        data_status=status,
+        participating_strategies=participating,
+        excluded_strategies=excluded,
+        configured_weights=configured_weights,
+        normalized_weights=normalized_weights,
     )

@@ -24,6 +24,7 @@ function retryCurrentRoute(
   }
   if (pathname.startsWith('/strategies')) {
     void queryClient.invalidateQueries({ queryKey: ['strategies'] });
+    void queryClient.invalidateQueries({ queryKey: ['strategy-readiness'] });
     void queryClient.invalidateQueries({ queryKey: ['overview'] });
     return;
   }

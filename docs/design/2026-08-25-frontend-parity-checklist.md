@@ -1,6 +1,6 @@
 # SPA Feature Parity Checklist
 
-Manual verification gate before cutover from legacy dashboard (`/`) to the React SPA (`/app`). See [2026-08-25-react-antd-spa-design.md](./specs/2026-08-25-react-antd-spa-design.md).
+Manual verification gate before cutover from legacy dashboard (`/`) to the React SPA (`/app`). See [2026-08-25-react-antd-spa-design.md](../specs/2026-08-25-react-antd-spa-design.md).
 
 ## How to run Vite + Python
 

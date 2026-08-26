@@ -8,7 +8,7 @@
 
 **Tech Stack:** React 18、TypeScript、Ant Design 5（`theme` / `darkAlgorithm`）、zustand、现有 Vite SPA、CSS 变量（无 Tailwind / GSAP）。
 
-**Spec:** `docs/superpowers/specs/2026-08-26-dual-theme-ux-design.md`
+**Spec:** `docs/specs/2026-08-26-dual-theme-ux-design.md`
 
 ## Global Constraints
 
@@ -42,7 +42,7 @@ frontend/src/
   components/performance/  # 图表网格/tooltip 跟主题（P1）
   components/calendar/     # wash 走变量（P1）
   components/instrument/   # 周期 Tab / tooltip（P1）
-docs/superpowers/
+docs/
   specs/2026-08-26-dual-theme-ux-design.md
   plans/2026-08-26-dual-theme-ux.md
 ```
@@ -555,8 +555,8 @@ export function cssVar(name: string, fallback = ''): string {
 ### Task 7: 验收清单与文档回写
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-08-26-dual-theme-ux-design.md`（勾选 Acceptance）
-- Modify: `docs/superpowers/parity-checklist.md`（若存在前端检查项，追加主题两项）
+- Modify: `docs/specs/2026-08-26-dual-theme-ux-design.md`（勾选 Acceptance）
+- Modify: `docs/design/2026-08-25-frontend-parity-checklist.md`（若存在前端检查项，追加主题两项）
 
 - [ ] **Step 1: 按规格 Acceptance Criteria 逐项勾选**
 

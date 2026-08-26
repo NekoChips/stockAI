@@ -1,5 +1,7 @@
 """Web static assets and HTML rendering."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
@@ -7,10 +9,6 @@ _PACKAGE_DIR = Path(__file__).resolve().parent
 
 def spa_root() -> Path:
     return _PACKAGE_DIR / "spa"
-
-
-def render_dashboard_html() -> str:
-    return (_PACKAGE_DIR / "dashboard.html").read_text(encoding="utf-8")
 
 
 def render_spa_index() -> str:

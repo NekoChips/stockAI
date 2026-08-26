@@ -1,0 +1,7 @@
+{
+  "entryJsMaxKb": 430,
+  "initialJsMaxKb": 680,
+  "dashboardRouteJsMaxKb": 940,
+  "lazyChunkMaxKb": 360,
+  "totalJsMaxKb": 2200
+}

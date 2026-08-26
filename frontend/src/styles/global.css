@@ -566,6 +566,33 @@ body {
 .dash-enter > *:nth-child(5) { animation-delay: 200ms; }
 .dash-enter > *:nth-child(6) { animation-delay: 250ms; }
 
+.dashboard-deferred-section {
+  min-width: 0;
+}
+
+.dashboard-deferred-placeholder {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 18px;
+  padding: 20px;
+  overflow: hidden;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.dashboard-deferred-placeholder-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dashboard-deferred-placeholder .ant-skeleton {
+  max-width: 92%;
+}
+
 .legend-toggle,
 .instrument-period-tabs button,
 .value-toggle {

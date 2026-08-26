@@ -1,8 +1,15 @@
 import { apiGet, apiSend } from './client';
-import type { StrategiesPayload, StrategyProfile } from '@/types/dashboard';
+import type { StrategiesPayload, StrategyProfile, StrategyReadinessPayload } from '@/types/dashboard';
 
 export function fetchStrategies(signal?: AbortSignal) {
   return apiGet<StrategiesPayload>('/api/dashboard/strategies', signal);
+}
+
+export function fetchStrategyReadiness(symbol: string, signal?: AbortSignal) {
+  return apiGet<StrategyReadinessPayload>(
+    `/api/strategy-readiness?symbol=${encodeURIComponent(symbol)}`,
+    signal,
+  );
 }
 
 export function saveStrategyProfile(profile: StrategyProfile, signal?: AbortSignal) {

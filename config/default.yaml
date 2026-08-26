@@ -33,7 +33,9 @@
         "quote_max_symbols_per_request": 5,
         "quote_max_requests_per_minute": 8,
         "kline_max_symbols_per_request": 1,
-        "kline_max_requests_per_minute": 8,
+        "kline_max_requests_per_minute": 10,
+        "kline_request_interval_seconds": 6,
+        "kline_cache_seconds": 21600,
         "history_count": 2000,
         "circuit_breaker_failure_threshold": 1,
         "circuit_breaker_cooldown_seconds": 60

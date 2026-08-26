@@ -35,6 +35,7 @@ class MockMarketDataStore:
         self._decision_events: list[dict] = []
         self._futures_positions: list[dict] = []
         self._overseas_market_data: list[dict] = []
+        self._data_task_status: dict[str, dict] = {}
         self._sector_mapping: dict[str, dict] = {}
         self._lhb_records: list[dict] = []
         self._seat_profiles: dict[str, dict] = {}
@@ -281,6 +282,24 @@ class MockMarketDataStore:
             self._overseas_market_data.append(deepcopy(row))
         return len(rows)
 
+    def save_data_task_status(self, task_name, trade_date, status, success_count, failure_count, error_summary, started_at, finished_at) -> None:
+        self._data_task_status[task_name] = {
+            "task_name": task_name,
+            "trade_date": str(trade_date),
+            "status": status,
+            "success_count": int(success_count),
+            "failure_count": int(failure_count),
+            "error_summary": error_summary,
+            "started_at": started_at.isoformat() if hasattr(started_at, "isoformat") else str(started_at),
+            "finished_at": finished_at.isoformat() if hasattr(finished_at, "isoformat") else str(finished_at),
+        }
+
+    def load_data_task_status(self, task_name: str | None = None) -> list[dict]:
+        rows = list(self._data_task_status.values())
+        if task_name:
+            rows = [row for row in rows if row["task_name"] == task_name]
+        return deepcopy(rows)
+
     def load_latest_overseas_data(self, market: str | None = None) -> list[dict]:
         rows = [item for item in self._overseas_market_data if market is None or item.get("market") == market]
         latest: dict[str, dict] = {}
@@ -293,6 +312,12 @@ class MockMarketDataStore:
 
     def load_instrument_sector(self, symbol: str) -> str | None:
         return self._sector_mapping.get(symbol, {}).get("sector")
+
+    def load_sector_mappings(self, symbol: str | None = None) -> list[dict]:
+        rows = list(self._sector_mapping.values())
+        if symbol:
+            rows = [row for row in rows if row.get("symbol") == symbol]
+        return deepcopy(rows)
 
     def save_lhb_records(self, rows: list[dict]) -> int:
         for row in rows:

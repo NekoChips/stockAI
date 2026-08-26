@@ -23,7 +23,7 @@
 
 **文档中的色表是镜像。** 色值冲突时以代码为准，并按 §7 回写本文。
 
-历史实现记录（非权威）：[`docs/superpowers/specs/2026-08-26-dual-theme-ux-design.md`](../superpowers/specs/2026-08-26-dual-theme-ux-design.md)。功能门禁另见 [`docs/superpowers/parity-checklist.md`](../superpowers/parity-checklist.md)。
+历史实现记录（非权威）：[`2026-08-26-dual-theme-ux-design.md`](../specs/2026-08-26-dual-theme-ux-design.md)。功能门禁另见 [`2026-08-25-frontend-parity-checklist.md`](./2026-08-25-frontend-parity-checklist.md)。
 
 ---
 
@@ -220,7 +220,7 @@
 - [ ] Focus 环两主题可见；`prefers-reduced-motion` 下无强制入场动画  
 - [ ] 无新增硬编码 `#fff` / `#edf1f6` 一类亮色字面量（业务色除外且须有暗色方案）  
 
-SPA 功能对等门禁仍以 [`parity-checklist.md`](../superpowers/parity-checklist.md) 为准。
+SPA 功能对等门禁仍以 [`2026-08-25-frontend-parity-checklist.md`](./2026-08-25-frontend-parity-checklist.md) 为准。
 
 ---
 

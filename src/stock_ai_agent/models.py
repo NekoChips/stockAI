@@ -16,6 +16,13 @@ class Direction(str, Enum):
     WATCH = "观望"
 
 
+class StrategyDataStatus(str, Enum):
+    READY = "READY"
+    UNAVAILABLE = "UNAVAILABLE"
+    INVALID = "INVALID"
+    NEUTRAL = "NEUTRAL"
+
+
 class OrderStatus(str, Enum):
     CREATED = "已创建"
     APPROVED = "风控通过"
@@ -78,6 +85,13 @@ class Bar:
 
 
 @dataclass(frozen=True)
+class ExternalDailyBar:
+    source_symbol: str
+    trade_date: datetime
+    close_price: Decimal
+
+
+@dataclass(frozen=True)
 class FeatureSet:
     symbol: str
     timestamp: datetime
@@ -101,6 +115,12 @@ class StrategySignal:
     objections: List[str] = field(default_factory=list)
     explanation: str = ""
     version: str = "v1"
+    data_status: StrategyDataStatus = StrategyDataStatus.READY
+    data_status_reason: str = ""
+    participating_strategies: List[str] = field(default_factory=list)
+    excluded_strategies: List[str] = field(default_factory=list)
+    configured_weights: Dict[str, Decimal] = field(default_factory=dict)
+    normalized_weights: Dict[str, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

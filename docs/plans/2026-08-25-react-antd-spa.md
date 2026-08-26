@@ -8,7 +8,7 @@
 
 **Tech Stack:** React 18, TypeScript, Vite 6, Ant Design 5, TanStack Query 5, zustand, React Router 6, dayjs, npm, Python 3.12 stdlib HTTP server, Node 22 Docker stage.
 
-**Spec:** `docs/superpowers/specs/2026-08-25-react-antd-spa-design.md`
+**Spec:** `docs/specs/2026-08-25-react-antd-spa-design.md`
 
 ## Global Constraints
 
@@ -83,7 +83,7 @@ src/stock_ai_agent/
 Dockerfile               # Node 22 frontend stage
 pyproject.toml           # package-data spa
 .gitignore
-docs/superpowers/parity-checklist.md
+    docs/design/2026-08-25-frontend-parity-checklist.md
 ```
 
 ---
@@ -1385,7 +1385,7 @@ EOF
 ### Task 13: Parity checklist doc + README dual-entry note
 
 **Files:**
-- Create: `docs/superpowers/parity-checklist.md` (copy checklist from spec; add “how to run Vite + Python”)
+- Create: `docs/design/2026-08-25-frontend-parity-checklist.md` (copy checklist from spec; add “how to run Vite + Python”)
 - Modify: `README.md` (short “Web UI” note: `/` legacy, `/app` SPA, `cd frontend && npm run dev`)
 
 **Interfaces:**
@@ -1399,7 +1399,7 @@ EOF
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/superpowers/parity-checklist.md README.md
+git add docs/design/2026-08-25-frontend-parity-checklist.md README.md
 git commit -m "$(cat <<'EOF'
 docs: add SPA dual-entry notes and manual parity checklist
 
@@ -1427,7 +1427,7 @@ EOF
 
 - [ ] **Step 1: Confirm checklist**
 
-Do not start this task until `docs/superpowers/parity-checklist.md` is fully checked by a human.
+Do not start this task until `docs/design/2026-08-25-frontend-parity-checklist.md` is fully checked by a human.
 
 - [ ] **Step 2: Switch base path to `/`**
 
@@ -1482,7 +1482,7 @@ EOF
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-08-25-react-antd-spa.md`. Spec at `docs/superpowers/specs/2026-08-25-react-antd-spa-design.md`.
+Plan complete and saved to `docs/plans/2026-08-25-react-antd-spa.md`. Spec at `docs/specs/2026-08-25-react-antd-spa-design.md`.
 
 **Two execution options:**
 

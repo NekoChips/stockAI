@@ -74,8 +74,31 @@ class SpaAssetTests(unittest.TestCase):
             conn.request("GET", "/")
             res = conn.getresponse()
             body = res.read().decode("utf-8")
-            self.assertEqual(res.status, 200)
-            self.assertIn("StockAI · 策略执行台", body)
+            self.assertEqual(res.status, 302)
+            self.assertEqual(res.getheader("Location"), "/app/")
+            self.assertEqual(body, "")
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_root_returns_503_when_spa_is_missing(self):
+        config = load_config()
+        store = SQLiteMarketDataStore()
+        missing = self.spa_dir / "missing-spa"
+        old_root = web_assets.spa_root
+        web_assets.spa_root = lambda: missing  # type: ignore[method-assign]
+        server = create_dashboard_server(config, store, host="127.0.0.1", port=0)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address
+            conn = HTTPConnection(host, port, timeout=5)
+            conn.request("GET", "/")
+            res = conn.getresponse()
+            body = res.read().decode("utf-8")
+            self.assertEqual(res.status, 503)
+            self.assertIn("SPA 尚未构建", body)
+        finally:
+            server.shutdown()
+            server.server_close()
+            web_assets.spa_root = old_root  # type: ignore[method-assign]

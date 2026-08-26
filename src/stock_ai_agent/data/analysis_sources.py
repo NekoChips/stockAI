@@ -71,11 +71,14 @@ def fetch_korea_market_data() -> list[dict]:
     return rows
 
 
-def fetch_lhb_data(trade_date: date) -> list[dict]:
-    try:
-        import akshare as ak
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("AKShare 不可用，无法同步龙虎榜。") from exc
+def fetch_lhb_data(trade_date: date, ak_module=None) -> list[dict]:
+    if ak_module is None:
+        try:
+            import akshare as ak
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError("AKShare 不可用，无法同步龙虎榜。") from exc
+    else:
+        ak = ak_module
     frame = ak.stock_lhb_detail_em(start_date=trade_date.strftime("%Y%m%d"), end_date=trade_date.strftime("%Y%m%d"))
     records: list[dict] = []
     for _, item in frame.iterrows():
@@ -83,8 +86,43 @@ def fetch_lhb_data(trade_date: date) -> list[dict]:
         code = get("代码", "股票代码")
         if not code:
             continue
-        records.append({"trade_date": trade_date.isoformat(), "symbol": f"{str(code).zfill(6)}.{ 'SH' if str(code).startswith(('6', '5')) else 'SZ'}", "name": get("名称", "股票名称"), "reason": get("上榜原因"), "close_price": str(get("收盘价") or "0"), "change_pct": str(get("涨跌幅") or "0"), "turnover_rate": str(get("换手率") or "0"), "total_amount": str(get("成交额") or "0"), "net_buy": str(get("净买额") or "0"), "source": "akshare"})
+        record = {"trade_date": trade_date.isoformat(), "symbol": f"{str(code).zfill(6)}.{ 'SH' if str(code).startswith(('6', '5')) else 'SZ'}", "name": get("名称", "股票名称"), "reason": get("上榜原因"), "close_price": str(get("收盘价") or "0"), "change_pct": str(get("涨跌幅") or "0"), "turnover_rate": str(get("换手率") or "0"), "total_amount": str(get("成交额") or "0"), "net_buy": str(get("净买额") or "0"), "star_net_buy": str(get("游资净买额", "知名游资净买额") or "") or None, "institution_net_buy": str(get("机构净买额", "机构买入净额") or "") or None, "seat_detail_available": False, "source": "akshare", "raw_data": {str(column): str(item[column]) for column in frame.columns}}
+        detail_loader = getattr(ak, "stock_lhb_stock_detail_em", None)
+        if detail_loader is not None:
+            try:
+                for side, flag in (("buy", "买入"), ("sell", "卖出")):
+                    detail_frame = detail_loader(symbol=str(code).zfill(6), date=trade_date.strftime("%Y%m%d"), flag=flag)
+                    detail_rows = _normalize_lhb_seat_rows(detail_frame, side)
+                    for index, (seat_name, amount, net_amount) in enumerate(detail_rows[:5], start=1):
+                        record[f"{side}_seat_{index}"] = seat_name
+                        record[f"{side}_amount_{index}"] = str(amount)
+                        record[f"{side}_net_{index}"] = str(net_amount)
+                    record["seat_detail_available"] = record["seat_detail_available"] or bool(detail_rows)
+            except Exception:
+                record["seat_detail_available"] = False
+        records.append(record)
     return records
+
+
+def _normalize_lhb_seat_rows(frame, side: str) -> list[tuple[str, Decimal, Decimal]]:
+    rows: list[tuple[str, Decimal, Decimal]] = []
+    columns = {str(column) for column in getattr(frame, "columns", [])}
+    seat_column = next((column for column in ("营业部名称", "席位名称", "营业部") if column in columns), None)
+    amount_column = next((column for column in (("买入金额", "买入额") if side == "buy" else ("卖出金额", "卖出额")) if column in columns), None)
+    net_column = next((column for column in ("净额", "净买额", "净卖额") if column in columns), None)
+    if not seat_column or not amount_column:
+        return rows
+    for _, item in frame.iterrows():
+        seat = str(item[seat_column] or "").strip()
+        if not seat:
+            continue
+        try:
+            amount = Decimal(str(item[amount_column] or "0").replace(",", ""))
+            net_amount = Decimal(str(item[net_column] or "0").replace(",", "")) if net_column else Decimal("0")
+        except Exception:
+            continue
+        rows.append((seat, amount, net_amount))
+    return rows
 
 
 def fetch_futures_positions(as_of: date | None = None) -> list[dict]:

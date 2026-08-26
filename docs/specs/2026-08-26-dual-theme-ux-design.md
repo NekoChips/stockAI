@@ -3,7 +3,7 @@
 **Date:** 2026-08-26  
 **Status:** 已实现（待手动验收主题切换与暗色漏白）  
 **Product:** StockAI 策略执行台（React + Ant Design SPA）  
-**规范权威：** 长期设计规范以 [`docs/design-system/README.md`](../../design-system/README.md) 为准；本文保留为该次改造的设计/验收记录。  
+**规范权威：** 长期设计规范以 [`2026-08-26-design-system.md`](../design/2026-08-26-design-system.md) 为准；本文保留为该次改造的设计/验收记录。  
 **关联：** 延续 `2026-08-25-react-antd-spa-design.md`；该规格中「不做视觉重设计 / 暗色主题」对本任务作废，其余 API / 双入口约束不变。
 
 ## Problem

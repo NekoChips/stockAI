@@ -5,6 +5,7 @@ WORKDIR /src
 # Vite outDir is ../src/stock_ai_agent/spa relative to frontend/; seed .gitkeep before build.
 COPY src/stock_ai_agent/spa/.gitkeep ./src/stock_ai_agent/spa/.gitkeep
 COPY frontend/package.json frontend/package-lock.json ./frontend/
+COPY scripts/check-frontend-bundle.mjs ./scripts/check-frontend-bundle.mjs
 
 WORKDIR /src/frontend
 

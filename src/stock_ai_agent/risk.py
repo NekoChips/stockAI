@@ -39,6 +39,8 @@ class RiskEngine:
         if not quote.is_fresh:
             return self._reject(signal, "行情数据已过期，禁止产生新的模拟订单。")
         position = portfolio.positions.get(signal.symbol)
+        if not instrument.trading_enabled and signal.direction in {Direction.BUY, Direction.ADD}:
+            return self._reject(signal, "标的未启用交易，禁止买入或加仓。")
         if position and position.quantity > 0:
             position.highest_price = max(position.highest_price, quote.latest_price)
         forced_reason = self._forced_reason(position, quote, portfolio, historical_peak)
