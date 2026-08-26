@@ -1,4 +1,5 @@
 import type { InstrumentDetail, TradeMarker } from '@/types/dashboard';
+import { chartPalette } from '@/theme/cssVars';
 import { fmtMoney } from '@/utils/format';
 
 export type InstrumentPeriod =
@@ -211,9 +212,10 @@ export function drawInstrumentChart(
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
+  const palette = chartPalette();
   const points = base?.points ?? [];
   if (!points.length) {
-    ctx.fillStyle = '#667085';
+    ctx.fillStyle = palette.subtle;
     ctx.font = '14px Fira Sans, sans-serif';
     ctx.fillText('暂无本地行情数据', 24, 38);
     return null;
@@ -237,8 +239,8 @@ export function drawInstrumentChart(
 
   ctx.font = '11px Fira Sans, sans-serif';
   ctx.lineWidth = 1;
-  ctx.strokeStyle = '#e6edf6';
-  ctx.fillStyle = '#667085';
+  ctx.strokeStyle = palette.line;
+  ctx.fillStyle = palette.subtle;
 
   for (let index = 0; index < 5; index++) {
     const y = top + (graphH * index) / 4;
@@ -262,7 +264,7 @@ export function drawInstrumentChart(
     points.forEach((point, index) => {
       const x = xFor(index);
       const rising = point.close >= point.open;
-      ctx.strokeStyle = rising ? '#d92d20' : '#07875b';
+      ctx.strokeStyle = rising ? palette.gain : palette.loss;
       ctx.fillStyle = ctx.strokeStyle;
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -276,7 +278,7 @@ export function drawInstrumentChart(
     });
   } else {
     ctx.beginPath();
-    ctx.strokeStyle = '#1769e0';
+    ctx.strokeStyle = palette.brand;
     ctx.lineWidth = 2.5;
     points.forEach((point, index) => {
       const x = xFor(index);
@@ -300,11 +302,11 @@ export function drawInstrumentChart(
     const sell = SELL_DIRECTIONS.has(marker.direction);
     const x = xFor(index);
     const y = Math.max(top + 10, yFor(points[index].close) - (sell ? -18 : 18));
-    ctx.fillStyle = sell ? '#07875b' : '#d92d20';
+    ctx.fillStyle = sell ? palette.loss : palette.gain;
     ctx.beginPath();
     ctx.arc(x, y, 10, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = palette.surface;
     ctx.font = '700 10px Fira Sans, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(sell ? 'S' : 'B', x, y + 3.5);
@@ -313,7 +315,7 @@ export function drawInstrumentChart(
 
   if (focusIndex >= 0) {
     const x = xFor(focusIndex);
-    ctx.strokeStyle = '#8aa6ca';
+    ctx.strokeStyle = palette.crosshair;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
     ctx.moveTo(x, top);

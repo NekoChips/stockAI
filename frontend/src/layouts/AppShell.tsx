@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUiStore } from '@/stores/uiStore';
 import { invalidateDashboardQueries } from '@/components/dashboard/DashboardRefreshControls';
+import { ThemeToggle } from '@/components/theme/ThemeToggle';
 
 const { Header, Content } = Layout;
 
@@ -55,28 +56,22 @@ export function AppShell() {
     )?.key ?? '/';
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          background: '#fff',
-          paddingInline: 24,
-        }}
-      >
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          StockAI
+    <Layout className="app-shell" style={{ minHeight: '100vh' }}>
+      <Header className="app-shell-header">
+        <Typography.Title level={4} className="app-brand" style={{ margin: 0 }}>
+          Stock<span>AI</span>
         </Typography.Title>
         <Menu
           mode="horizontal"
           selectedKeys={[selected]}
           items={items}
           onClick={({ key }) => navigate(key)}
+          className="app-shell-menu"
           style={{ flex: 1, minWidth: 0 }}
         />
+        <ThemeToggle />
       </Header>
-      <Content style={{ padding: 24 }}>
+      <Content className="app-shell-content">
         {notice ? (
           <Alert
             type="error"

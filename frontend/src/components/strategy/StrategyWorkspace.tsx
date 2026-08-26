@@ -115,7 +115,7 @@ function parseJsonField(value: string, label: string): Record<string, unknown> {
 function DraftDiff({ diff }: { diff: ProfileDiffEntry[] }) {
   if (!diff.length) return null;
   return (
-    <div style={{ marginTop: 16, padding: 12, background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 6 }}>
+    <div className="strategy-draft-banner">
       <Typography.Text strong>待确认变更</Typography.Text>
       <ul style={{ margin: '8px 0 0', padding: 0, listStyle: 'none' }}>
         {diff.map((item) => (
@@ -152,15 +152,14 @@ function StrategyMembers({
       {members.map((item) => (
         <Col xs={24} md={8} key={item.strategy_id}>
           <div
+            className={`strategy-toggle-row${enabled.includes(item.strategy_id) ? ' is-on' : ''}`}
             style={{
               display: 'grid',
               gridTemplateColumns: 'auto 1fr 72px',
               alignItems: 'center',
               gap: 7,
               padding: 9,
-              border: '1px solid #d9d9d9',
               borderRadius: 5,
-              background: enabled.includes(item.strategy_id) ? '#f8fbff' : '#fff',
             }}
           >
             <Checkbox
@@ -333,7 +332,7 @@ export function StrategyWorkspace() {
         </Space>
       </div>
 
-      <Row gutter={[1, 16]} style={{ background: '#edf1f6' }}>
+      <Row gutter={[1, 16]} className="strategy-list-shell">
         <Col xs={24} lg={7}>
           <Card
             size="small"
@@ -357,12 +356,11 @@ export function StrategyWorkspace() {
                   const draft = hasDraft(item);
                   return (
                     <List.Item
+                      className={`strategy-list-item${selected ? ' is-selected' : ''}`}
                       style={{
                         padding: '8px 10px',
                         marginBottom: 4,
-                        border: selected ? '1px solid #9fc2f4' : '1px solid transparent',
                         borderRadius: 6,
-                        background: selected ? '#f0f7ff' : 'transparent',
                         cursor: 'pointer',
                       }}
                       onClick={() => setSelectedProfileId(item.profile_id)}
@@ -382,10 +380,10 @@ export function StrategyWorkspace() {
                             text={statusLabel(item)}
                           />
                         </div>
-                        <Space size={8} style={{ marginTop: 6, fontSize: 10, color: '#8c8c8c' }}>
+                        <Space size={8} className="strategy-meta" style={{ marginTop: 6, fontSize: 10 }}>
                           <span>{(item.enabled ?? []).length} 项策略</span>
                           <span>Revision {item.revision ?? '--'}</span>
-                          {draft ? <span style={{ color: '#faad14', fontWeight: 700 }}>有草稿</span> : null}
+                          {draft ? <span className="strategy-draft-flag">有草稿</span> : null}
                         </Space>
                       </div>
                     </List.Item>
@@ -437,14 +435,14 @@ export function StrategyWorkspace() {
                   </Space>
                 </div>
 
-                <Row gutter={[1, 1]} style={{ marginTop: 18, border: '1px solid #edf1f6', borderRadius: 6, overflow: 'hidden' }}>
+                <Row gutter={[1, 1]} className="strategy-metric-shell">
                   {[
                     { label: '当前状态', value: statusLabel(profile) },
                     { label: '启用策略', value: `${(profile.enabled ?? []).length} 项` },
                     { label: '配置版本', value: `Revision ${profile.revision ?? '--'}` },
                   ].map((item) => (
                     <Col xs={8} key={item.label}>
-                      <div style={{ padding: '11px 12px', background: '#fbfdff' }}>
+                      <div className="strategy-metric-cell">
                         <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                           {item.label}
                         </Typography.Text>

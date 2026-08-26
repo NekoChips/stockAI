@@ -61,14 +61,12 @@ function ReportListItem({
       type="button"
       aria-pressed={active}
       onClick={() => onSelect(item.report_date)}
+      className={`report-list-item${active ? ' is-active' : ''}`}
       style={{
         width: '100%',
         minHeight: 88,
         padding: '14px 16px',
         border: 0,
-        borderBottom: '1px solid #edf1f6',
-        background: active ? '#f0f7ff' : '#fff',
-        boxShadow: active ? 'inset 4px 0 0 #1677ff' : 'none',
         textAlign: 'left',
         cursor: 'pointer',
       }}
@@ -80,11 +78,11 @@ function ReportListItem({
         <Tag color="blue">{item.status}</Tag>
       </div>
       <div
+        className="report-list-meta"
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           marginTop: 9,
-          color: '#667085',
           fontSize: 12,
         }}
       >
@@ -106,7 +104,7 @@ function ReportDetailPanel({ report, loading }: { report: DailyReport | null; lo
 
   if (!report) {
     return (
-      <div style={{ display: 'grid', placeItems: 'center', minHeight: 320, padding: 32, color: '#667085' }}>
+      <div style={{ display: 'grid', placeItems: 'center', minHeight: 320, padding: 32, color: 'var(--subtle)' }}>
         暂无已归档日报。收盘后将自动生成结构化复盘。
       </div>
     );
@@ -198,12 +196,9 @@ function ReportDetailPanel({ report, loading }: { report: DailyReport | null; lo
 
   return (
     <div>
-      <Row
-        gutter={[1, 1]}
-        style={{ borderBottom: '1px solid #edf1f6', background: '#edf1f6' }}
-      >
+      <Row gutter={[1, 1]} className="report-hero-shell">
         <Col xs={24} md={12} lg={10}>
-          <div style={{ padding: '18px 20px', background: '#fff', minHeight: 120 }}>
+          <div className="report-hero-cell" style={{ minHeight: 120 }}>
             <span className="kicker">交易日报</span>
             <div className="tabular" style={{ marginTop: 5, fontSize: 24, fontWeight: 720 }}>
               {report.report_date}
@@ -219,7 +214,7 @@ function ReportDetailPanel({ report, loading }: { report: DailyReport | null; lo
           { label: '当日收益率', value: fmtPct(account.daily_return), tone: toneClass(account.daily_return) },
         ].map((item) => (
           <Col xs={8} md={4} lg={5} key={item.label}>
-            <div style={{ padding: '18px 20px', background: '#fff', minHeight: 120 }}>
+            <div className="report-hero-cell" style={{ minHeight: 120 }}>
               <span className="kicker">{item.label}</span>
               <strong className={`tabular ${item.tone}`} style={{ display: 'block', marginTop: 7, fontSize: 16 }}>
                 {item.value}
@@ -230,7 +225,7 @@ function ReportDetailPanel({ report, loading }: { report: DailyReport | null; lo
       </Row>
 
       {systemNotes.length ? (
-        <section style={{ padding: 20, borderBottom: '1px solid #edf1f6' }}>
+        <section className="report-section">
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
             <Typography.Title level={5} style={{ margin: 0 }}>
               运行备注
@@ -247,7 +242,7 @@ function ReportDetailPanel({ report, loading }: { report: DailyReport | null; lo
         </section>
       ) : null}
 
-      <section style={{ padding: 20, borderBottom: '1px solid #edf1f6' }}>
+      <section className="report-section">
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
           <Typography.Title level={5} style={{ margin: 0 }}>
             收盘持仓
@@ -267,7 +262,7 @@ function ReportDetailPanel({ report, loading }: { report: DailyReport | null; lo
         />
       </section>
 
-      <section style={{ padding: 20, borderBottom: '1px solid #edf1f6' }}>
+      <section className="report-section">
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
           <Typography.Title level={5} style={{ margin: 0 }}>
             模拟成交
@@ -287,7 +282,7 @@ function ReportDetailPanel({ report, loading }: { report: DailyReport | null; lo
         />
       </section>
 
-      <section style={{ padding: 20, borderBottom: '1px solid #edf1f6' }}>
+      <section className="report-section">
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
           <Typography.Title level={5} style={{ margin: 0 }}>
             决策逻辑
@@ -302,7 +297,8 @@ function ReportDetailPanel({ report, loading }: { report: DailyReport | null; lo
             {displayedDecisions.map((item, index) => (
               <article
                 key={`${item.symbol}-${item.direction}-${index}`}
-                style={{ padding: '14px 0', borderTop: index ? '1px solid #edf1f6' : 0 }}
+                className="report-decision-item"
+                style={{ padding: '14px 0', borderTop: index ? '1px solid var(--line)' : 0 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
                   <Typography.Text strong>
@@ -475,7 +471,7 @@ export function ReportArchive() {
       <Col xs={24} lg={17}>
         <Card size="small" styles={{ body: { padding: 0 } }} aria-live="polite">
           {detailMessage ? (
-            <div style={{ display: 'grid', placeItems: 'center', minHeight: 320, padding: 32, color: '#667085' }}>
+            <div style={{ display: 'grid', placeItems: 'center', minHeight: 320, padding: 32, color: 'var(--subtle)' }}>
               {detailMessage}
             </div>
           ) : (

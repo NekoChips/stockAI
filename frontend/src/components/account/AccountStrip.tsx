@@ -38,17 +38,10 @@ export function AccountStrip({ data, dataUpdatedAt }: AccountStripProps) {
     : '--:--:--';
 
   return (
-    <div
-      style={{
-        border: '1px solid #e6edf6',
-        borderRadius: 8,
-        overflow: 'hidden',
-        background: '#fff',
-      }}
-    >
+    <div className="account-strip">
       <Row wrap={false}>
-        <Col flex="1 1 310px" style={{ background: 'linear-gradient(105deg,#fff 0%,#f5f9ff 100%)' }}>
-          <div style={{ padding: '18px 16px', borderRight: '1px solid #e6edf6' }}>
+        <Col flex="1 1 310px" className="account-strip-hero">
+          <div style={{ padding: '18px 16px', borderRight: '1px solid var(--line)' }}>
             <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 650 }}>
               模拟盘总资产
             </Typography.Text>
@@ -65,7 +58,7 @@ export function AccountStrip({ data, dataUpdatedAt }: AccountStripProps) {
         <Col flex="0 0 auto">
           <Row wrap={false}>
             <Col>
-              <div style={{ padding: '18px 16px', borderRight: '1px solid #e6edf6', minWidth: 118 }}>
+              <div style={{ padding: '18px 16px', borderRight: '1px solid var(--line)', minWidth: 118 }}>
                 <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 650 }}>
                   今日收益率
                 </Typography.Text>
@@ -75,7 +68,7 @@ export function AccountStrip({ data, dataUpdatedAt }: AccountStripProps) {
               </div>
             </Col>
             <Col>
-              <div style={{ padding: '18px 16px', borderRight: '1px solid #e6edf6', minWidth: 118 }}>
+              <div style={{ padding: '18px 16px', borderRight: '1px solid var(--line)', minWidth: 118 }}>
                 <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 650 }}>
                   今日决策
                 </Typography.Text>
@@ -85,7 +78,7 @@ export function AccountStrip({ data, dataUpdatedAt }: AccountStripProps) {
               </div>
             </Col>
             <Col>
-              <div style={{ padding: '18px 16px', borderRight: '1px solid #e6edf6', minWidth: 118 }}>
+              <div style={{ padding: '18px 16px', borderRight: '1px solid var(--line)', minWidth: 118 }}>
                 <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 650 }}>
                   最近成交
                 </Typography.Text>
@@ -93,7 +86,7 @@ export function AccountStrip({ data, dataUpdatedAt }: AccountStripProps) {
               </div>
             </Col>
             <Col>
-              <div style={{ padding: '18px 16px', borderRight: '1px solid #e6edf6', minWidth: 118 }}>
+              <div style={{ padding: '18px 16px', borderRight: '1px solid var(--line)', minWidth: 118 }}>
                 <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 650 }}>
                   待确认回测
                 </Typography.Text>

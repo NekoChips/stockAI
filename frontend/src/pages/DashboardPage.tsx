@@ -101,29 +101,31 @@ export default function DashboardPage() {
 
       <AccountStrip data={data} dataUpdatedAt={dataUpdatedAt} />
 
-      <Row gutter={[20, 20]} style={{ marginTop: 20 }}>
-        <Col xs={24} lg={16}>
-          <PerformancePanel />
-        </Col>
-        <Col xs={24} lg={8}>
-          <ProfitCalendar />
-        </Col>
-      </Row>
+      <div className="dash-enter">
+        <Row gutter={[20, 20]} style={{ marginTop: 20 }}>
+          <Col xs={24} lg={16}>
+            <PerformancePanel />
+          </Col>
+          <Col xs={24} lg={8}>
+            <ProfitCalendar />
+          </Col>
+        </Row>
 
-      <Row gutter={[20, 20]} style={{ marginTop: 20 }}>
-        <Col xs={24} lg={16}>
-          <PositionsTable data={data} onAddInstrument={() => setDrawerOpen(true)} />
-        </Col>
-        <Col xs={24} lg={8}>
-          <DecisionTimeline data={data} />
-        </Col>
-        <Col xs={24} lg={16}>
-          <Leaderboard data={data} />
-        </Col>
-        <Col xs={24} lg={8}>
-          <RecentActivity data={data} />
-        </Col>
-      </Row>
+        <Row gutter={[20, 20]} style={{ marginTop: 20 }}>
+          <Col xs={24} lg={16}>
+            <PositionsTable data={data} onAddInstrument={() => setDrawerOpen(true)} />
+          </Col>
+          <Col xs={24} lg={8}>
+            <DecisionTimeline data={data} />
+          </Col>
+          <Col xs={24} lg={16}>
+            <Leaderboard data={data} />
+          </Col>
+          <Col xs={24} lg={8}>
+            <RecentActivity data={data} />
+          </Col>
+        </Row>
+      </div>
 
       <AddInstrumentDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </>

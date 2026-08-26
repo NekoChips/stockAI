@@ -7,7 +7,7 @@
 .cursor/
 .gemini/
 .skills/
-design-system/
+/design-system/
 
 # AI planning, review, and workflow artifacts
 /design.md

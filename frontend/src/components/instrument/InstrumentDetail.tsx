@@ -27,6 +27,7 @@ interface InstrumentDetailProps {
 
 export function InstrumentDetail({ data }: InstrumentDetailProps) {
   const announce = useUiStore((s) => s.announce);
+  const theme = useUiStore((s) => s.theme);
   const [period, setPeriod] = useState<InstrumentPeriod>('intraday');
   const [focusIndex, setFocusIndex] = useState(-1);
   const [tooltip, setTooltip] = useState<{
@@ -84,7 +85,7 @@ export function InstrumentDetail({ data }: InstrumentDetailProps) {
 
   useEffect(() => {
     redraw();
-  }, [redraw]);
+  }, [redraw, theme]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

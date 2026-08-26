@@ -104,6 +104,7 @@ function BenchmarkOutperformance({ data }: { data: PerformancePayload }) {
 export function PerformancePanel() {
   const announce = useUiStore((s) => s.announce);
   const setNotice = useUiStore((s) => s.setNotice);
+  const theme = useUiStore((s) => s.theme);
 
   const [rangeMode, setRangeMode] = useState<RangeMode>('yearly');
   const [customStart, setCustomStart] = useState<string | null>(null);
@@ -191,7 +192,7 @@ export function PerformancePanel() {
 
   useEffect(() => {
     redraw();
-  }, [redraw, chartState]);
+  }, [redraw, chartState, theme]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

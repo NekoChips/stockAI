@@ -74,11 +74,11 @@ export function DashboardRefreshControls({
 
   const busy = phase === 'fetching' || backgroundFetching;
   const statusIcon = busy ? (
-    <SyncOutlined spin style={{ color: '#1677ff' }} />
+    <SyncOutlined spin style={{ color: 'var(--brand)' }} />
   ) : phase === 'justUpdated' ? (
-    <CheckCircleOutlined style={{ color: '#52c41a' }} />
+    <CheckCircleOutlined style={{ color: 'var(--loss)' }} />
   ) : (
-    <SyncOutlined style={{ color: '#8c8c8c' }} />
+    <SyncOutlined style={{ color: 'var(--subtle)' }} />
   );
 
   const tooltip = busy
