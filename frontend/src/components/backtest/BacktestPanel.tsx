@@ -54,6 +54,36 @@ function ratioValue(value: number | null): string {
   return value === null ? '--' : `${value.toFixed(2)}x`;
 }
 
+function formatParamValue(value: unknown): string {
+  if (value == null || value === '') return '--';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function parameterPills(parameters: BacktestRun['parameters'] | undefined): { key: string; label: string; value: string }[] {
+  const pills: { key: string; label: string; value: string }[] = [];
+  for (const [key, value] of Object.entries(parameters || {})) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [innerKey, innerValue] of Object.entries(value as Record<string, unknown>)) {
+        pills.push({
+          key: `${key}.${innerKey}`,
+          label: innerKey,
+          value: formatParamValue(innerValue),
+        });
+      }
+    } else {
+      pills.push({ key, label: key, value: formatParamValue(value) });
+    }
+  }
+  return pills;
+}
+
 function backtestScore(run: BacktestRun): number | null {
   const total = metricNumber(run, 'total_return');
   const drawdown = metricNumber(run, 'max_drawdown');
@@ -256,9 +286,9 @@ export function BacktestPanel() {
       width: 220,
       render: (_, run) => (
         <Space size={[4, 4]} wrap>
-          {Object.entries(run.parameters || {}).map(([key, value]) => (
-            <Tag key={key} className="param-pill">
-              {key}：{value}
+          {parameterPills(run.parameters).map((item) => (
+            <Tag key={item.key} className="param-pill">
+              {item.label}：{item.value}
             </Tag>
           ))}
         </Space>
