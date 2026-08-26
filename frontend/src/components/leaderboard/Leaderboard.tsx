@@ -82,7 +82,7 @@ export function Leaderboard({ data }: LeaderboardProps) {
       <Typography.Paragraph type="secondary" style={{ marginBottom: 12, fontSize: 13 }}>
         按证券维度排序，正数为盈利、负数为亏损
       </Typography.Paragraph>
-      <Space wrap style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid #edf1f6' }}>
+      <Space wrap style={{ marginBottom: 12, paddingBottom: 12 }} className="section-rule">
         {SORT_CONTROLS.map(([key, label]) => (
           <Button
             key={key}

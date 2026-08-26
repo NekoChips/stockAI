@@ -125,7 +125,7 @@ export function AddInstrumentDrawer({ open, onClose }: AddInstrumentDrawerProps)
         autoFocus
       />
       {selected ? (
-        <div style={{ marginTop: 16, padding: 12, background: '#f6f8fb', borderRadius: 8 }}>
+        <div className="watchlist-selected">
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             已选择
           </Typography.Text>
@@ -141,9 +141,11 @@ export function AddInstrumentDrawer({ open, onClose }: AddInstrumentDrawerProps)
         renderItem={(item) => (
           <List.Item
             onClick={() => setSelected(item)}
+            className={
+              selected?.symbol === item.symbol ? 'watchlist-result is-selected' : 'watchlist-result'
+            }
             style={{
               cursor: 'pointer',
-              background: selected?.symbol === item.symbol ? '#e6f4ff' : undefined,
               borderRadius: 8,
               paddingInline: 12,
             }}

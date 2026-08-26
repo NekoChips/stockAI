@@ -251,15 +251,8 @@ export function PositionsTable({ data, onAddInstrument }: PositionsTableProps) {
         scroll={{ x: 960, y: 360 }}
         rowClassName={(row) => (row.isWatch ? 'watch-row' : '')}
       />
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-          borderTop: '1px solid #edf1f6',
-          background: '#fbfdff',
-        }}
-      >
-        <div style={{ padding: '11px 14px', borderRight: '1px solid #edf1f6' }}>
+      <div className="positions-footer">
+        <div>
           <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 650 }}>
             当前仓位
           </Typography.Text>
@@ -267,7 +260,7 @@ export function PositionsTable({ data, onAddInstrument }: PositionsTableProps) {
             {fmtPct(asset ? market / asset : 0)}
           </div>
         </div>
-        <div style={{ padding: '11px 14px', borderRight: '1px solid #edf1f6' }}>
+        <div>
           <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 650 }}>
             可用资金
           </Typography.Text>
@@ -275,7 +268,7 @@ export function PositionsTable({ data, onAddInstrument }: PositionsTableProps) {
             {fmtMoney(portfolio.cash)} 元
           </div>
         </div>
-        <div style={{ padding: '11px 14px' }}>
+        <div>
           <Typography.Text type="secondary" style={{ fontSize: 12, fontWeight: 650 }}>
             执行状态
           </Typography.Text>
