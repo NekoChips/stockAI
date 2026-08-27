@@ -97,7 +97,9 @@ def sync_watchlist_history(
                 continue
             sync_start, sync_end = range_to_sync
             qfq_bars = adapter.get_bars(instrument.symbol, interval=interval, start=sync_start, end=sync_end, adjust=adjust)
-            raw_bars = adapter.get_bars(instrument.symbol, interval=interval, start=sync_start, end=sync_end, adjust="")
+            # AlphaFeed requires an explicit `none`; an empty value becomes
+            # `adjust=` and is rejected with HTTP 400.
+            raw_bars = adapter.get_bars(instrument.symbol, interval=interval, start=sync_start, end=sync_end, adjust="none")
             source = getattr(adapter, "last_source", "") or config.data.history_provider
             if hasattr(store, "save_watchlist_price_tracks"):
                 counts[instrument.symbol] = store.save_watchlist_price_tracks(raw_bars, qfq_bars, interval=interval, source=source)

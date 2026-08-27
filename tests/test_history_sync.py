@@ -35,7 +35,7 @@ class HistorySyncTests(unittest.TestCase):
             self.assertEqual(result.synced_count, 1)
             self.assertEqual(len(store.load_watchlist_bars("588170.SH", price_mode="qfq")), 40)
             self.assertEqual(len(store.load_watchlist_bars("588170.SH", price_mode="raw")), 40)
-            self.assertEqual({call[1] for call in adapter.calls}, {"qfq", ""})
+            self.assertEqual({call[1] for call in adapter.calls}, {"qfq", "none"})
 
     def test_force_refresh_can_be_restricted_to_incomplete_symbols(self):
         config = replace(load_config(), universe=[InstrumentConfig("588170.SH", "etf", "测试 ETF")])
