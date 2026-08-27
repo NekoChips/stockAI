@@ -37,4 +37,3 @@ CREATE TABLE IF NOT EXISTS intraday_bars (
     PRIMARY KEY (symbol, interval_name, timestamp_value),
     INDEX idx_intraday_bars_trade_date (trade_date, symbol, interval_name, timestamp_value)
 ) CHARACTER SET utf8mb4;
-

@@ -1,9 +1,9 @@
 # 行情表拆分迁移操作手册
 
-**状态：** active  
-**负责人：** platform-and-operations  
-**创建日期：** 2026-08-27  
-**更新日期：** 2026-08-27  
+**状态：** active
+**负责人：** platform-and-operations
+**创建日期：** 2026-08-27
+**更新日期：** 2026-08-27
 **关联：** [行情数据表治理与 `bars` 淘汰实施方案](../plans/2026-08-27-market-data-table-governance.md)、[数据库数据字典](../architecture/2026-08-27-database-data-dictionary.md)
 
 ## 1. 适用范围

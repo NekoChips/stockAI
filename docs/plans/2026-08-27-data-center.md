@@ -1,9 +1,9 @@
 # 数据中心功能方案
 
-**状态：** draft  
-**负责人：** product-and-platform  
-**创建日期：** 2026-08-27  
-**更新日期：** 2026-08-27  
+**状态：** draft
+**负责人：** product-and-platform
+**创建日期：** 2026-08-27
+**更新日期：** 2026-08-27
 **关联：** [数据库数据字典](../architecture/2026-08-27-database-data-dictionary.md)、[行情数据表治理与 `bars` 淘汰实施方案](./2026-08-27-market-data-table-governance.md)、[实时快照与日 K 分时调度设计](../specs/2026-08-26-market-data-scheduling-design.md)
 
 ## 1. 方案结论

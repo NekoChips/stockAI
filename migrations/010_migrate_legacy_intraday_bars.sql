@@ -40,4 +40,3 @@ ON DUPLICATE KEY UPDATE
     amount = VALUES(amount),
     source = VALUES(source),
     updated_at = CURRENT_TIMESTAMP;
-
