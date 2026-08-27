@@ -47,13 +47,16 @@ def missing_history_range(
     as_of: date | None = None,
     loader: Any | None = None,
 ) -> tuple[str, str] | None:
-    """Return the inclusive missing K-line range, or None when storage is current."""
+    """Return one inclusive missing K-line range, prioritizing an old prefix gap."""
     end_date = min(compact_date(configured_end), as_of or date.today())
     load_history = loader or store.load_watchlist_bars
-    recent = load_history(symbol, interval=interval, limit=1)
+    existing = sorted(load_history(symbol, interval=interval), key=lambda item: item.timestamp)
     start_date = compact_date(configured_start)
-    if recent:
-        start_date = max(start_date, recent[-1].timestamp.date() + timedelta(days=1))
+    if existing:
+        earliest_date = existing[0].timestamp.date()
+        if earliest_date > start_date:
+            return date_code(start_date), date_code(min(end_date, earliest_date - timedelta(days=1)))
+        start_date = max(start_date, existing[-1].timestamp.date() + timedelta(days=1))
     if start_date > end_date:
         return None
     return date_code(start_date), date_code(end_date)
