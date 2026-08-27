@@ -183,6 +183,34 @@ class AlphaFeedAdapterTests(unittest.TestCase):
 
         self.assertEqual(client.klines.calls[0][1]["adjust"], "none")
 
+    def test_history_requests_use_alpha_feed_maximum_when_not_overridden(self):
+        client = FakeAlphaFeedClient(
+            kline_frames={
+                "588170.SH": FakeFrame(
+                    [{"trade_date": "2026-08-20", "open": 1, "high": 1, "low": 1, "close": 1}]
+                )
+            }
+        )
+        adapter = AlphaFeedAdapter(
+            client=client,
+            min_request_interval_seconds=0,
+            kline_max_requests_per_minute=60,
+            monotonic_fn=lambda: 10,
+            sleep_fn=lambda _seconds: None,
+        )
+
+        adapter.get_bars_batch(["588170.SH"], start="20200101", end="20260820")
+
+        self.assertEqual(client.klines.calls[0][1]["count"], 10000)
+
+    def test_history_count_is_clamped_to_alpha_feed_maximum(self):
+        adapter = AlphaFeedAdapter(
+            client=FakeAlphaFeedClient(),
+            history_count=20000,
+        )
+
+        self.assertEqual(adapter.history_count, 10000)
+
     def test_external_daily_kline_quota_allows_ten_but_clamps_above_plan_limit(self):
         adapter = AlphaFeedAdapter(
             client=FakeAlphaFeedClient(),

@@ -53,6 +53,7 @@ class ReferenceDataTests(unittest.TestCase):
 
     def test_benchmark_sync_requests_only_dates_after_latest_stored_bar(self):
         config = load_config()
+        config.data.history["start"] = "20260105"
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "reference.sqlite3")
             adapter = FakeReferenceAdapter()

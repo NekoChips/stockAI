@@ -35,7 +35,7 @@
         "quote_max_requests_per_minute": 10,
         "kline_max_symbols_per_request": 1,
         "kline_max_requests_per_minute": 10,
-        "history_count": 0,
+        "history_count": 10000,
         "circuit_breaker_failure_threshold": 1,
         "network_circuit_breaker_cooldown_seconds": 15,
         "rate_limit_circuit_breaker_cooldown_seconds": 60,

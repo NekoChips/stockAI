@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from stock_ai_agent.config import InstrumentConfig, load_config
-from stock_ai_agent.history_sync import sync_watchlist_history
+from stock_ai_agent.history_sync import missing_history_range, sync_watchlist_history
 from stock_ai_agent.models import Bar
 from stock_ai_agent.storage.mock import MockMarketDataStore
 
@@ -25,6 +25,21 @@ class HistoryAdapter:
 
 
 class HistorySyncTests(unittest.TestCase):
+    def test_missing_history_range_repairs_old_prefix_before_appending_latest(self):
+        config = replace(load_config(), universe=[InstrumentConfig("588170.SH", "etf", "测试 ETF")])
+        store = MockMarketDataStore()
+        store.seed_watchlist_bars(
+            [
+                Bar("588170.SH", datetime(2026, 4, 3, tzinfo=timezone.utc), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1")),
+                Bar("588170.SH", datetime(2026, 8, 20, tzinfo=timezone.utc), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1"), Decimal("1")),
+            ]
+        )
+
+        self.assertEqual(
+            missing_history_range(store, "588170.SH", "daily", "20200101", "20500101", date(2026, 8, 20)),
+            ("20200101", "20260402"),
+        )
+
     def test_shared_service_persists_qfq_and_raw_tracks(self):
         config = replace(load_config(), universe=[InstrumentConfig("588170.SH", "etf", "测试 ETF")])
         adapter = HistoryAdapter()
