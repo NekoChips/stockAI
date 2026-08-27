@@ -119,6 +119,7 @@ YYYY-MM-DD-topic.md
 - [功能治理与模块拆分实施计划](./plans/2026-08-26-function-governance.md)
 - [双主题与交互增强实施计划](./plans/2026-08-26-dual-theme-ux.md)
 - [行情数据表治理与 bars 淘汰实施方案](./plans/2026-08-27-market-data-table-governance.md)
+- [数据中心功能方案](./plans/2026-08-27-data-center.md)
 
 ### 复核与发布
 
