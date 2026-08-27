@@ -101,7 +101,7 @@ class FallbackHistoryDataProvider:
         self.rate_limit_cooldown_seconds = max(0.0, float(rate_limit_cooldown_seconds))
         self.capability_cooldown_seconds = max(0.0, float(capability_cooldown_seconds))
 
-    def get_bars(self, symbol: str, interval: str = "daily", start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
+    def get_bars(self, symbol: str, interval: str = "daily", start: str = "20200101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         return self._call(
             "get_bars",
             symbol=symbol,
@@ -111,7 +111,7 @@ class FallbackHistoryDataProvider:
             adjust=adjust,
         )
 
-    def get_index_bars(self, symbol: str, akshare_symbol: str, start: str = "20240101", end: str = "20500101") -> List[Bar]:
+    def get_index_bars(self, symbol: str, akshare_symbol: str, start: str = "20200101", end: str = "20500101") -> List[Bar]:
         return self._call(
             "get_index_bars",
             symbol=symbol,
@@ -124,7 +124,7 @@ class FallbackHistoryDataProvider:
         self,
         symbols: list[str],
         interval: str = "daily",
-        start: str = "20240101",
+        start: str = "20200101",
         end: str = "20500101",
         adjust: str = "qfq",
     ) -> dict[str, List[Bar]]:

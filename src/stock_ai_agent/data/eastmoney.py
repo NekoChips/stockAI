@@ -185,7 +185,7 @@ class EastmoneyPublicAdapter:
     def get_daily_bars(
         self,
         symbol: str,
-        start: str = "20240101",
+        start: str = "20200101",
         end: str = "20500101",
         adjust: str = "qfq",
     ) -> List[Bar]:
@@ -195,7 +195,7 @@ class EastmoneyPublicAdapter:
         self,
         symbol: str,
         akshare_symbol: str,
-        start: str = "20240101",
+        start: str = "20200101",
         end: str = "20500101",
     ) -> List[Bar]:
         del akshare_symbol
@@ -205,7 +205,7 @@ class EastmoneyPublicAdapter:
         self,
         symbol: str,
         interval: str = "daily",
-        start: str = "20240101",
+        start: str = "20200101",
         end: str = "20500101",
         adjust: str = "qfq",
     ) -> List[Bar]:

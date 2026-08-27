@@ -85,7 +85,7 @@ def sync_benchmark_history(config: AppConfig, store: Any, adapter=None, as_of: d
     if not hasattr(adapter, "get_index_bars"):
         raise ValueError("当前历史数据源暂不支持指数历史 K 线同步。")
     history_config = config.data.history
-    configured_start = str(history_config.get("start", "20240101"))
+    configured_start = str(history_config.get("start", "20200101"))
     configured_end = str(history_config.get("end", "20500101"))
     counts: dict[str, int] = {}
     errors: list[str] = []

@@ -15,7 +15,7 @@ class HistoryAdapter:
     def __init__(self):
         self.calls = []
 
-    def get_bars(self, symbol, interval="daily", start="20240101", end="20500101", adjust="qfq"):
+    def get_bars(self, symbol, interval="daily", start="20200101", end="20500101", adjust="qfq"):
         self.calls.append((symbol, adjust, start, end))
         base = datetime(2026, 8, 1, 15, 0, tzinfo=timezone.utc)
         return [

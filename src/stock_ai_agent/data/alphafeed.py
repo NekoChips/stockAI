@@ -346,10 +346,10 @@ class AlphaFeedAdapter:
         self._quote_cache.update({symbol: (cache_now, quote) for symbol, quote in quotes.items()})
         return {**cached, **quotes}
 
-    def get_bars(self, symbol: str, interval: str = "daily", start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
+    def get_bars(self, symbol: str, interval: str = "daily", start: str = "20200101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         return self.get_bars_batch([symbol], interval, start, end, adjust)[validate_hs_symbol(symbol)]
 
-    def get_bars_batch(self, symbols: Iterable[str], interval: str = "daily", start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> Dict[str, List[Bar]]:
+    def get_bars_batch(self, symbols: Iterable[str], interval: str = "daily", start: str = "20200101", end: str = "20500101", adjust: str = "qfq") -> Dict[str, List[Bar]]:
         normalized = [validate_hs_symbol(symbol) for symbol in symbols]
         if not normalized:
             return {}
@@ -389,7 +389,7 @@ class AlphaFeedAdapter:
         self.last_source = "alphafeed"
         return result
 
-    def get_index_bars(self, symbol: str, akshare_symbol: str, start: str = "20240101", end: str = "20500101") -> List[Bar]:
+    def get_index_bars(self, symbol: str, akshare_symbol: str, start: str = "20200101", end: str = "20500101") -> List[Bar]:
         del akshare_symbol
         return self.get_bars(symbol, "daily", start, end, "none")
 

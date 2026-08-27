@@ -146,7 +146,7 @@ class BiyingAPIAdapter:
         text = self._request_text(f"{self.base_url}{path}", "必盈实时行情")
         return parse_quote_response(text, normalized, freshness_seconds=self.freshness_seconds)
 
-    def get_bars(self, symbol: str, interval: str = "daily", start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
+    def get_bars(self, symbol: str, interval: str = "daily", start: str = "20200101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         self._require_licence()
         normalized = normalize_symbol(symbol)
         interval_code = INTERVALS.get(interval, interval)
@@ -162,7 +162,7 @@ class BiyingAPIAdapter:
         text = self._request_text(f"{self.history_base_url}{path}?{query}", "必盈历史 K 线")
         return parse_bars_response(text, normalized)
 
-    def get_daily_bars(self, symbol: str, start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
+    def get_daily_bars(self, symbol: str, start: str = "20200101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         return self.get_bars(symbol, "daily", start, end, adjust)
 
     def _require_licence(self) -> None:

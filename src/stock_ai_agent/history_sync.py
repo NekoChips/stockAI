@@ -71,7 +71,7 @@ def sync_watchlist_history(
     """Synchronize the effective watchlist through one shared history path."""
     history = config.data.history
     interval = str(history.get("interval", "daily"))
-    start = str(history.get("start", "20240101"))
+    start = str(history.get("start", "20200101"))
     end = str(history.get("end", "20500101"))
     adjust = str(history.get("adjust", "qfq"))
     minimum = int(history.get("monitor_minimum_bars", 35))

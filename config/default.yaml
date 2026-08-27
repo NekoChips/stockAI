@@ -14,7 +14,7 @@
     "history": {
       "interval": "daily",
       "adjust": "qfq",
-      "start": "20240101",
+      "start": "20200101",
       "end": "20500101",
       "monitor_minimum_bars": 35,
       "monitor_history_limit": 80,
