@@ -258,7 +258,7 @@ class AKShareAdapter:
             return [item.strip() for item in configured.split(",") if item.strip()]
         return [str(item) for item in configured]
 
-    def get_bars(self, symbol: str, interval: str = "daily", start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
+    def get_bars(self, symbol: str, interval: str = "daily", start: str = "20200101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         ak = self._akshare()
         normalized = normalize_symbol(symbol)
         code = normalized.split(".", 1)[0]
@@ -297,10 +297,10 @@ class AKShareAdapter:
             failures.append(f"{function_name}: 返回空数据")
         raise AKShareError(f"AKShare 历史 K 线获取失败：{'；'.join(failures)}")
 
-    def get_daily_bars(self, symbol: str, start: str = "20240101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
+    def get_daily_bars(self, symbol: str, start: str = "20200101", end: str = "20500101", adjust: str = "qfq") -> List[Bar]:
         return self.get_bars(symbol, "daily", start, end, adjust)
 
-    def get_index_bars(self, symbol: str, akshare_symbol: str, start: str = "20240101", end: str = "20500101") -> List[Bar]:
+    def get_index_bars(self, symbol: str, akshare_symbol: str, start: str = "20200101", end: str = "20500101") -> List[Bar]:
         ak = self._akshare()
         function_names = self._index_history_function_names()
         failures: List[str] = []
