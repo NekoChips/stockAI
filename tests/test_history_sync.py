@@ -33,15 +33,15 @@ class HistorySyncTests(unittest.TestCase):
             result = sync_watchlist_history(config, store, adapter, as_of=date(2026, 8, 20))
 
             self.assertEqual(result.synced_count, 1)
-            self.assertEqual(len(store.load_bars("588170.SH", price_mode="qfq")), 40)
-            self.assertEqual(len(store.load_bars("588170.SH", price_mode="raw")), 40)
+            self.assertEqual(len(store.load_watchlist_bars("588170.SH", price_mode="qfq")), 40)
+            self.assertEqual(len(store.load_watchlist_bars("588170.SH", price_mode="raw")), 40)
             self.assertEqual({call[1] for call in adapter.calls}, {"qfq", ""})
 
     def test_force_refresh_can_be_restricted_to_incomplete_symbols(self):
         config = replace(load_config(), universe=[InstrumentConfig("588170.SH", "etf", "测试 ETF")])
         adapter = HistoryAdapter()
         store = MockMarketDataStore()
-        store.save_bars(adapter.get_bars("588170.SH"), source="mock")
+        store.seed_watchlist_bars(adapter.get_bars("588170.SH"))
 
         result = sync_watchlist_history(config, store, adapter, force=False, only_incomplete=True, as_of=date(2026, 8, 20))
 

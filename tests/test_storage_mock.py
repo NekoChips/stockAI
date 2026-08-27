@@ -13,9 +13,9 @@ class MockStorageTests(unittest.TestCase):
         bar = Bar("588170.SH", datetime(2026, 8, 20, tzinfo=timezone.utc), Decimal("1"), Decimal("1.1"), Decimal("0.9"), Decimal("1.05"), Decimal("100"))
         quote = Quote("588170.SH", "科创100ETF基金", datetime(2026, 8, 21, 10, 0, tzinfo=timezone.utc), Decimal("1.06"), Decimal("1"), Decimal("1.1"), Decimal("0.9"), Decimal("1"), Decimal("100"), Decimal("100"), Decimal("6"), "mock", datetime(2026, 8, 21, 10, 0, tzinfo=timezone.utc))
 
-        self.assertEqual(store.save_bars([bar]), 1)
+        self.assertEqual(store.seed_watchlist_bars([bar]), 1)
         self.assertEqual(store.save_quotes([quote]), 1)
-        self.assertEqual(store.load_bars("588170.SH"), [bar])
+        self.assertEqual(store.load_watchlist_bars("588170.SH"), [bar])
         self.assertEqual(store.load_latest_quotes()["588170.SH"]["latest_price"], Decimal("1.06"))
 
     def test_prune_archives_previous_trade_day_quotes_as_minute_bars(self):
@@ -24,7 +24,7 @@ class MockStorageTests(unittest.TestCase):
         store.save_quotes([quote])
 
         self.assertEqual(store.prune_market_quotes(date(2026, 8, 21)), 1)
-        self.assertEqual(len(store.load_bars("588170.SH", interval="minute")), 1)
+        self.assertEqual(len(store.load_intraday_bars("588170.SH", interval="1m")), 1)
 
     def test_repeated_same_decision_is_not_recorded_as_a_new_business_event(self):
         store = MockMarketDataStore()

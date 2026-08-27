@@ -138,7 +138,7 @@ class RealTimePaperTradingMonitor:
         history_limit = int(self.config.data.history.get("monitor_history_limit", 80))
         minimum_history_bars = int(self.config.data.history.get("monitor_minimum_bars", 35))
         symbols = [instrument.symbol for instrument in universe.instruments]
-        bars_by_symbol = self.store.load_bars_batch(symbols, interval=interval, limit=history_limit)
+        bars_by_symbol = self.store.load_watchlist_bars_batch(symbols, interval=interval, limit=history_limit)
         histories = {symbol: [bar.close_price for bar in bars] for symbol, bars in bars_by_symbol.items()}
         decisions: List[Decision] = []
         fills: List[Fill] = []
@@ -776,7 +776,7 @@ class RealTimePaperTradingMonitor:
         return [
             instrument.symbol
             for instrument in effective_watchlist(self.config, self.store)
-            if len(self.store.load_bars(instrument.symbol, interval=interval, limit=minimum)) < minimum
+            if len(self.store.load_watchlist_bars(instrument.symbol, interval=interval, limit=minimum)) < minimum
         ]
 
 

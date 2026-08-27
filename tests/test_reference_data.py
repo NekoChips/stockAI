@@ -44,7 +44,7 @@ class ReferenceDataTests(unittest.TestCase):
             benchmark_counts = sync_benchmark_history(config, store, adapter)
 
             catalog = store.search_instrument_catalog("茅台")
-            benchmark_bars = store.load_bars("000001.SH")
+            benchmark_bars = store.load_index_bars("000001.SH")
 
         self.assertEqual(catalog_count, 2)
         self.assertEqual(catalog[0]["symbol"], "600519.SH")

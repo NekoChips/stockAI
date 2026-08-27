@@ -116,7 +116,7 @@ class MonitorTests(unittest.TestCase):
         config = configured_config()
         store = MockMarketDataStore()
         for item in config.universe:
-            store.save_bars(bars(item.symbol), source="mock")
+            store.seed_watchlist_bars(bars(item.symbol))
         monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
 
         with patch.object(monitor, "_sync_watchlist_history", side_effect=AssertionError("交易时段不应同步日 K")):
@@ -167,7 +167,7 @@ class MonitorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
             for item in config.universe:
-                store.save_bars(bars(item.symbol), source="mock")
+                store.seed_watchlist_bars(bars(item.symbol))
             monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
             with patch("stock_ai_agent.monitor.aggregate_signals", side_effect=lambda signals, weights, aggregator=None: buy_signal(next(iter(signals)).symbol)):
                 result = monitor.run_iteration(trade_now)
@@ -184,7 +184,7 @@ class MonitorTests(unittest.TestCase):
         trade_now = datetime(2026, 8, 17, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         store = MockMarketDataStore()
         for item in config.universe:
-            store.save_bars(bars(item.symbol), source="mock")
+            store.seed_watchlist_bars(bars(item.symbol))
         bullish = {
             "close": Decimal("1.10"), "sma20": Decimal("1.00"), "ema12": Decimal("1.08"), "ema26": Decimal("1.02"),
             "macd": Decimal("0.02"), "macd_histogram": Decimal("0.01"), "rsi14": Decimal("60"),
@@ -262,7 +262,7 @@ class MonitorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
             for item in config.universe:
-                store.save_bars(bars(item.symbol)[:10], source="mock")
+                store.seed_watchlist_bars(bars(item.symbol)[:10])
             monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
             with patch("stock_ai_agent.monitor.aggregate_signals") as aggregate:
                 result = monitor.run_iteration(trade_now)
@@ -277,7 +277,7 @@ class MonitorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
             for item in config.universe:
-                store.save_bars(bars(item.symbol), source="mock")
+                store.seed_watchlist_bars(bars(item.symbol))
             monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
             with patch("stock_ai_agent.monitor.aggregate_signals", side_effect=lambda signals, weights, aggregator=None: buy_signal(next(iter(signals)).symbol)):
                 monitor.run_iteration(trade_now)
@@ -324,7 +324,7 @@ class MonitorTests(unittest.TestCase):
             ), patch("stock_ai_agent.monitor.aggregate_signals", side_effect=lambda signals, weights, aggregator=None: buy_signal(next(iter(signals)).symbol)):
                 monitor.run_forever(max_iterations=1, on_update=lambda result: setattr(self, "startup_result", result), ignore_market_hours=True, now_fn=lambda: trade_now)
 
-            counts = [len(store.load_bars(item.symbol)) for item in config.universe]
+            counts = [len(store.load_watchlist_bars(item.symbol)) for item in config.universe]
 
         self.assertTrue(all(count == 0 for count in counts))
         self.assertEqual(self.startup_result.status, "initializing")
@@ -344,7 +344,7 @@ class MonitorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
             for item in config.universe:
-                store.save_bars(bars(item.symbol), source="mock")
+                store.seed_watchlist_bars(bars(item.symbol))
             history = CountingHistoryProvider()
             monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider(), history)
             with patch("stock_ai_agent.monitor.sync_instrument_catalog", return_value=2), patch(
@@ -370,7 +370,7 @@ class MonitorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "monitor.sqlite3")
             for item in config.universe:
-                store.save_bars(bars(item.symbol), source="mock")
+                store.seed_watchlist_bars(bars(item.symbol))
             monitor = RealTimePaperTradingMonitor(config, store, MockQuoteProvider())
             with patch("stock_ai_agent.monitor.Thread", InlineThread), patch(
                 "stock_ai_agent.monitor.sync_instrument_catalog", return_value=2

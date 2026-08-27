@@ -88,25 +88,45 @@ def sync_benchmark_history(config: AppConfig, store: Any, adapter=None, as_of: d
     configured_start = str(history_config.get("start", "20240101"))
     configured_end = str(history_config.get("end", "20500101"))
     counts: dict[str, int] = {}
+    errors: list[str] = []
+    started_at = datetime.now()
     for benchmark in config.benchmarks:
-        range_to_sync = missing_history_range(
-            store,
-            benchmark.symbol,
-            "daily",
-            configured_start,
-            configured_end,
-            as_of,
-        )
-        if range_to_sync is None:
+        try:
+            range_to_sync = missing_history_range(
+                store,
+                benchmark.symbol,
+                "daily",
+                configured_start,
+                configured_end,
+                as_of,
+                loader=store.load_index_bars,
+            )
+            if range_to_sync is None:
+                counts[benchmark.symbol] = 0
+                continue
+            start, end = range_to_sync
+            bars = adapter.get_index_bars(benchmark.symbol, benchmark.akshare_symbol, start=start, end=end)
+            source = getattr(adapter, "last_source", "") or config.data.history_provider
+            counts[benchmark.symbol] = store.save_index_price_tracks(
+                bars,
+                interval="daily",
+                source=f"{source}_benchmark",
+            )
+        except Exception as exc:  # noqa: BLE001 - isolate one benchmark failure
             counts[benchmark.symbol] = 0
-            continue
-        start, end = range_to_sync
-        bars = adapter.get_index_bars(benchmark.symbol, benchmark.akshare_symbol, start=start, end=end)
-        source = getattr(adapter, "last_source", "") or config.data.history_provider
-        counts[benchmark.symbol] = store.save_bars(
-            bars,
-            interval="daily",
-            source=f"{source}_benchmark",
+            errors.append(f"{benchmark.symbol}：{exc}")
+    if hasattr(store, "save_data_task_status"):
+        report_date = as_of or date.today()
+        finished_at = datetime.now()
+        store.save_data_task_status(
+            "benchmark_history",
+            report_date,
+            "success" if not errors else "degraded",
+            sum(1 for value in counts.values() if value > 0),
+            len(errors),
+            "；".join(errors),
+            started_at,
+            finished_at,
         )
     return counts
 
