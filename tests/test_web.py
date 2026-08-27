@@ -118,7 +118,7 @@ class WebDashboardTests(unittest.TestCase):
         quote_time = date(2026, 8, 17)
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMarketDataStore(Path(tmp) / "detail.sqlite3")
-            store.save_bars([
+            store.seed_watchlist_bars([
                 Bar("588170.SH", date(2026, 8, day), Decimal("1"), Decimal("1.2"), Decimal("0.9"), Decimal("1.1") + Decimal(day) / Decimal("100"), Decimal("100"))
                 for day in range(3, 18)
             ])
@@ -126,10 +126,10 @@ class WebDashboardTests(unittest.TestCase):
                 Quote("588170.SH", "科创100ETF基金", __import__("datetime").datetime(2026, 8, 17, 9, 31), Decimal("1.21"), Decimal("1"), Decimal("1.22"), Decimal("1"), Decimal("1.2"), Decimal("1"), Decimal("1"), Decimal("1"), "mock", __import__("datetime").datetime(2026, 8, 17, 9, 31)),
                 Quote("588170.SH", "科创100ETF基金", __import__("datetime").datetime(2026, 8, 17, 9, 36), Decimal("1.25"), Decimal("1"), Decimal("1.26"), Decimal("1"), Decimal("1.2"), Decimal("1"), Decimal("1"), Decimal("2"), "mock", __import__("datetime").datetime(2026, 8, 17, 9, 36)),
             ])
-            store.save_bars([
+            store.save_intraday_bars([
                 Bar("588170.SH", __import__("datetime").datetime(2026, 8, 14, 9, 31), Decimal("1"), Decimal("1.1"), Decimal("0.9"), Decimal("1.05"), Decimal("100")),
                 Bar("588170.SH", __import__("datetime").datetime(2026, 8, 14, 9, 32), Decimal("1.05"), Decimal("1.2"), Decimal("1"), Decimal("1.15"), Decimal("100")),
-            ], interval="minute", source="market_quotes")
+            ], interval="1m", source="market_quotes")
             store.record_fill(Fill("588170.SH", Direction.BUY, 1000, Decimal("1.22"), Decimal("1"), Decimal("0"), __import__("datetime").datetime(2026, 8, 17, 9, 35)))
             payload = build_instrument_detail_payload(config, store, "588170.SH", as_of=quote_time)
 
@@ -332,7 +332,7 @@ class WebDashboardTests(unittest.TestCase):
             store = SQLiteMarketDataStore(Path(tmp) / "dashboard.sqlite3")
             store.record_portfolio_snapshot(date(2026, 8, 1), Portfolio(Decimal("100")))
             store.record_portfolio_snapshot(date(2026, 8, 2), Portfolio(Decimal("108")))
-            store.save_bars(
+            store.save_index_price_tracks(
                 [
                     Bar("000001.SH", date(2026, 8, 1), Decimal("3000"), Decimal("3000"), Decimal("3000"), Decimal("3000"), Decimal("1")),
                     Bar("000001.SH", date(2026, 8, 2), Decimal("3030"), Decimal("3030"), Decimal("3030"), Decimal("3030"), Decimal("1")),

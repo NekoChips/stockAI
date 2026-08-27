@@ -217,7 +217,7 @@ export interface BacktestRun {
   id: number;
   strategy_id: string;
   strategy_profile_id: string;
-  parameters: Record<string, string | number>;
+  parameters: Record<string, unknown>;
   metrics: BacktestMetrics;
   status: string;
   confirmed_at?: string | null;
