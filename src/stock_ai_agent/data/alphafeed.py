@@ -35,6 +35,7 @@ RATE_LIMIT_WINDOW_SECONDS = 60.0
 SAFE_QUOTE_REQUESTS_PER_MINUTE = 10
 SAFE_KLINE_REQUESTS_PER_MINUTE = 10
 MAX_QUOTE_SYMBOLS_PER_REQUEST = 5
+MAX_HISTORY_COUNT = 10000
 
 
 def _decimal(value: Any) -> Decimal:
@@ -242,7 +243,12 @@ class AlphaFeedAdapter:
             0.0,
             float(quote_cache_seconds if quote_cache_seconds is not None else self.options.get("quote_cache_seconds", 3)),
         )
-        self.history_count = int(history_count if history_count is not None else self.options.get("history_count", 2000))
+        configured_history_count = int(
+            history_count if history_count is not None else self.options.get("history_count", MAX_HISTORY_COUNT)
+        )
+        # AlphaFeed defaults to 100 rows when count is omitted. Always use an
+        # explicit bounded count for long historical backfills.
+        self.history_count = min(MAX_HISTORY_COUNT, max(0, configured_history_count))
         self.quote_max_symbols_per_request = min(
             MAX_QUOTE_SYMBOLS_PER_REQUEST,
             max(
@@ -372,8 +378,8 @@ class AlphaFeedAdapter:
                     "to_dataframe": True,
                 }
                 if self.history_count > 0:
-                    # Keep an explicit count only for callers that request a bounded backfill.
-                    # The release configuration uses 0, allowing the date range to be authoritative.
+                    # AlphaFeed defaults to 100 rows when count is omitted;
+                    # keep the long-history request explicit and bounded.
                     kline_kwargs["count"] = self.history_count
                 table = client.klines.get(symbol, **kline_kwargs)
                 bars = _frame_bars(table, symbol, start, end)
