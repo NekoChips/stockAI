@@ -163,6 +163,26 @@ class AlphaFeedAdapterTests(unittest.TestCase):
         self.assertEqual(kwargs["adjust"], "none")
         self.assertEqual(kwargs["count"], 5)
 
+    def test_empty_adjust_is_normalized_to_explicit_none_for_raw_prices(self):
+        client = FakeAlphaFeedClient(
+            kline_frames={
+                "588170.SH": FakeFrame(
+                    [{"trade_date": "2026-08-20", "open": 1, "high": 1, "low": 1, "close": 1}]
+                )
+            }
+        )
+        adapter = AlphaFeedAdapter(
+            client=client,
+            min_request_interval_seconds=0,
+            kline_max_requests_per_minute=60,
+            monotonic_fn=lambda: 10,
+            sleep_fn=lambda _seconds: None,
+        )
+
+        adapter.get_bars_batch(["588170.SH"], start="20260820", end="20260820", adjust="")
+
+        self.assertEqual(client.klines.calls[0][1]["adjust"], "none")
+
     def test_external_daily_kline_quota_allows_ten_but_clamps_above_plan_limit(self):
         adapter = AlphaFeedAdapter(
             client=FakeAlphaFeedClient(),

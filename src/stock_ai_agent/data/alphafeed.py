@@ -354,7 +354,9 @@ class AlphaFeedAdapter:
         if not normalized:
             return {}
         period = PERIODS.get(interval, interval)
-        adjustment = ADJUSTS.get(adjust, adjust)
+        # Keep compatibility with older callers that used an empty string for
+        # raw prices, while always sending AlphaFeed a valid explicit value.
+        adjustment = ADJUSTS.get(adjust or "none", adjust or "none")
         if self.kline_max_symbols_per_request != 1:
             raise AlphaFeedError("A 股日 K 线套餐要求每次请求仅包含 1 个标的")
         client = self._client()
