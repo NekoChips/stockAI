@@ -27,8 +27,10 @@ from .mysql import _quote_ticks_to_minute_bars
 
 class MockMarketDataStore:
     def __init__(self, *_ignored) -> None:
-        self._bars: dict[tuple[str, str, str], Bar] = {}
+        self._watchlist_bars: dict[tuple[str, str, str], Bar] = {}
         self._price_tracks: dict[tuple[str, str, str], dict[str, Bar | Decimal]] = {}
+        self._index_bars: dict[tuple[str, str, str], Bar] = {}
+        self._intraday_bars: dict[tuple[str, str, str], Bar] = {}
         self._quotes: list[dict] = []
         self._quote_events: list[dict] = []
         self._watchlist: dict[str, dict[str, str]] = {}
@@ -78,14 +80,14 @@ class MockMarketDataStore:
     def release_monitor_lock(self, name: str = "stockai_monitor") -> None:
         return None
 
-    def save_bars(self, bars: list[Bar], interval: str = "daily", source: str = "unknown") -> int:
+    def seed_watchlist_bars(self, bars: list[Bar], interval: str = "daily") -> int:
         for bar in bars:
             timestamp = datetime.combine(bar.timestamp, time.min) if isinstance(bar.timestamp, date) and not isinstance(bar.timestamp, datetime) else bar.timestamp
             normalized = Bar(bar.symbol, timestamp, bar.open_price, bar.high_price, bar.low_price, bar.close_price, bar.volume, bar.amount, bar.price_mode, bar.adjustment_factor)
-            self._bars[(normalized.symbol, interval, normalized.timestamp.isoformat())] = normalized
+            self._watchlist_bars[(normalized.symbol, interval, normalized.timestamp.isoformat())] = normalized
         return len(bars)
 
-    def save_price_tracks(self, raw_bars: list[Bar], qfq_bars: list[Bar], interval: str = "daily", source: str = "unknown") -> int:
+    def save_watchlist_price_tracks(self, raw_bars: list[Bar], qfq_bars: list[Bar], interval: str = "daily", source: str = "unknown") -> int:
         raw_by_time = {item.timestamp: item for item in raw_bars}
         qfq_by_time = {item.timestamp: item for item in qfq_bars}
         for timestamp in sorted(set(raw_by_time) | set(qfq_by_time)):
@@ -95,20 +97,53 @@ class MockMarketDataStore:
                 continue
             factor = (qfq.close_price / raw.close_price).quantize(Decimal("0.00000001")) if raw and qfq and raw.close_price else Decimal("1")
             self._price_tracks[(reference.symbol, interval, timestamp.isoformat())] = {"raw": raw or reference, "qfq": qfq or reference, "factor": factor}
-        self.save_bars(qfq_bars or raw_bars, interval, source)
         return len(qfq_bars or raw_bars)
 
-    def load_bars(self, symbol: str, interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None, price_mode: str = "qfq") -> list[Bar]:
+    def load_watchlist_bars(self, symbol: str, interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None, price_mode: str = "qfq") -> list[Bar]:
         tracked = [track.get(price_mode) for (item_symbol, item_interval, _), track in self._price_tracks.items() if item_symbol == symbol and item_interval == interval]
-        rows = sorted((bar for bar in tracked if isinstance(bar, Bar)), key=lambda item: item.timestamp) if tracked else sorted((bar for (item_symbol, item_interval, _), bar in self._bars.items() if item_symbol == symbol and item_interval == interval), key=lambda item: item.timestamp)
+        rows = sorted((bar for bar in tracked if isinstance(bar, Bar)), key=lambda item: item.timestamp) if tracked else sorted((bar for (item_symbol, item_interval, _), bar in self._watchlist_bars.items() if item_symbol == symbol and item_interval == interval), key=lambda item: item.timestamp)
         if start is not None:
             rows = [bar for bar in rows if bar.timestamp.date() >= start]
         if end is not None:
             rows = [bar for bar in rows if bar.timestamp.date() <= end]
         return rows[-limit:] if limit is not None else rows
 
-    def load_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None, price_mode: str = "qfq") -> dict[str, list[Bar]]:
-        return {symbol: self.load_bars(symbol, interval=interval, limit=limit, start=start, end=end, price_mode=price_mode) for symbol in symbols}
+    def load_watchlist_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None, price_mode: str = "qfq") -> dict[str, list[Bar]]:
+        return {symbol: self.load_watchlist_bars(symbol, interval=interval, limit=limit, start=start, end=end, price_mode=price_mode) for symbol in symbols}
+
+    def save_index_price_tracks(self, bars: list[Bar], interval: str = "daily", source: str = "unknown") -> int:
+        del source
+        return self._store_bars(self._index_bars, bars, interval)
+
+    def load_index_bars(self, symbol: str, interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None) -> list[Bar]:
+        return self._select_bars(self._index_bars, symbol, interval, limit, start, end)
+
+    def load_index_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None) -> dict[str, list[Bar]]:
+        return {symbol: self.load_index_bars(symbol, interval=interval, limit=limit, start=start, end=end) for symbol in symbols}
+
+    def save_intraday_bars(self, bars: list[Bar], interval: str = "1m", source: str = "unknown") -> int:
+        del source
+        return self._store_bars(self._intraday_bars, bars, interval)
+
+    def load_intraday_bars(self, symbol: str, interval: str = "1m", limit: int | None = None, start: date | None = None, end: date | None = None) -> list[Bar]:
+        return self._select_bars(self._intraday_bars, symbol, interval, limit, start, end)
+
+    @staticmethod
+    def _store_bars(bucket: dict[tuple[str, str, str], Bar], bars: list[Bar], interval: str) -> int:
+        for bar in bars:
+            timestamp = datetime.combine(bar.timestamp, time.min) if isinstance(bar.timestamp, date) and not isinstance(bar.timestamp, datetime) else bar.timestamp
+            normalized = Bar(bar.symbol, timestamp, bar.open_price, bar.high_price, bar.low_price, bar.close_price, bar.volume, bar.amount, bar.price_mode, bar.adjustment_factor)
+            bucket[(normalized.symbol, interval, normalized.timestamp.isoformat())] = normalized
+        return len(bars)
+
+    @staticmethod
+    def _select_bars(bucket: dict[tuple[str, str, str], Bar], symbol: str, interval: str, limit: int | None, start: date | None, end: date | None) -> list[Bar]:
+        rows = sorted((bar for (item_symbol, item_interval, _), bar in bucket.items() if item_symbol == symbol and item_interval == interval), key=lambda item: item.timestamp)
+        if start is not None:
+            rows = [bar for bar in rows if bar.timestamp.date() >= start]
+        if end is not None:
+            rows = [bar for bar in rows if bar.timestamp.date() <= end]
+        return rows[-limit:] if limit is not None else rows
 
     def save_quotes(self, quotes: list[Quote]) -> int:
         for quote in quotes:
@@ -140,7 +175,7 @@ class MockMarketDataStore:
 
     def prune_market_quotes(self, trade_date: date) -> int:
         old = [row for row in self._quotes if row["trade_date"] != trade_date.isoformat()]
-        self.save_bars(_quote_ticks_to_minute_bars([{key: value for key, value in row.items() if key != "trade_date"} for row in old]), interval="minute", source="market_quotes")
+        self.save_intraday_bars(_quote_ticks_to_minute_bars([{key: value for key, value in row.items() if key != "trade_date"} for row in old]), interval="1m", source="market_quotes")
         self._quotes = [row for row in self._quotes if row["trade_date"] == trade_date.isoformat()]
         cutoff = trade_date - timedelta(days=7)
         self._quote_events = [row for row in self._quote_events if date.fromisoformat(row["trade_date"]) >= cutoff]

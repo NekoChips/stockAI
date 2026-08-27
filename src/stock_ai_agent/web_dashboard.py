@@ -150,7 +150,7 @@ def build_dashboard_performance_payload(
     )
     benchmark_names = {item.symbol: item.name for item in config.benchmarks}
     symbols = [item.symbol for item in config.benchmarks]
-    benchmark_bars = store.load_bars_batch(
+    benchmark_bars = store.load_index_bars_batch(
         symbols,
         interval="daily",
         start=selected_start,
@@ -326,7 +326,7 @@ def build_strategy_readiness_payload(config: AppConfig, store, symbol: str, as_o
     instrument = watchlist.get(symbol)
     if instrument is None:
         raise ValueError(f"标的 {symbol} 不在观察池中。")
-    bars = store.load_bars(symbol, interval="daily", limit=int(config.data.history.get("monitor_minimum_bars", 35))) if hasattr(store, "load_bars") else []
+    bars = store.load_watchlist_bars(symbol, interval="daily", limit=int(config.data.history.get("monitor_minimum_bars", 35))) if hasattr(store, "load_watchlist_bars") else []
     quote = store.load_latest_quotes([symbol]).get(symbol) if hasattr(store, "load_latest_quotes") else None
     external = store.load_latest_overseas_data() if hasattr(store, "load_latest_overseas_data") else []
     external_map = {str(row.get("symbol")): row for row in external}

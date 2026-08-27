@@ -13,7 +13,7 @@ class LhbBacktestTests(unittest.TestCase):
         start = datetime(2026, 8, 1, tzinfo=timezone.utc)
         raw = [Bar("600000.SH", start + timedelta(days=index), Decimal("10"), Decimal("10"), Decimal("10"), Decimal("10"), Decimal("1")) for index in range(4)]
         qfq = [Bar("600000.SH", start + timedelta(days=index), Decimal("10"), Decimal("10"), Decimal("10"), Decimal(str(10 + index)), Decimal("1")) for index in range(4)]
-        store.save_price_tracks(raw, qfq)
+        store.save_watchlist_price_tracks(raw, qfq)
         store.save_lhb_records([{"trade_date": "2026-08-01", "symbol": "600000.SH", "buy_seat_1": "测试席位"}])
 
         refresh_lhb_seat_profiles(store)

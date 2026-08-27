@@ -98,6 +98,7 @@ YYYY-MM-DD-topic.md
 - [前端设计系统](./design/2026-08-26-design-system.md)
 - [SPA 前端功能验收清单](./design/2026-08-25-frontend-parity-checklist.md)
 - [决策事件摘要与原始审计分离设计](./design/2026-08-26-decision-event-audit-separation.md)
+- [数据库数据字典](./architecture/2026-08-27-database-data-dictionary.md)
 
 ### 产品
 
@@ -117,17 +118,20 @@ YYYY-MM-DD-topic.md
 - [代码问题整改计划](./plans/2026-08-26-code-issues-remediation.md)
 - [功能治理与模块拆分实施计划](./plans/2026-08-26-function-governance.md)
 - [双主题与交互增强实施计划](./plans/2026-08-26-dual-theme-ux.md)
+- [行情数据表治理与 bars 淘汰实施方案](./plans/2026-08-27-market-data-table-governance.md)
 
 ### 复核与发布
 
 - [代码问题审查](./reviews/2026-08-25-code-issues-review.md)
 - [策略实现审阅](./reviews/2026-08-24-strategy-implementation-review.md)
 - [功能治理实施复核](./reviews/2026-08-26-function-governance-review.md)
+- [行情数据表治理实施复核](./reviews/2026-08-27-market-data-table-governance-review.md)
 - [v0.1.3 发布记录](./releases/v0.1.3.md)
 
 ### 运维
 
 - [决策事件维护](./operations/2026-08-26-decision-event-maintenance.md)
+- [行情表拆分迁移操作手册](./operations/2026-08-27-market-data-bars-migration.md)
 
 ## 归档说明
 

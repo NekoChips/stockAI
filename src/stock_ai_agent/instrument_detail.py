@@ -27,9 +27,9 @@ def build_instrument_detail_payload(
     if item is None:
         raise ValueError(f"标的 {normalized} 不在观察池中")
     as_of = as_of or date.today()
-    daily_bars = store.load_bars(normalized, interval="daily")
+    daily_bars = store.load_watchlist_bars(normalized, interval="daily")
     ticks = store.load_quote_ticks(normalized, as_of) if hasattr(store, "load_quote_ticks") else []
-    archived_minute_bars = store.load_bars(normalized, interval="minute")
+    archived_minute_bars = store.load_intraday_bars(normalized, interval="1m")
     current_minute_bars = aggregate_quote_ticks(ticks, 1)
     five_day_bars = _latest_trading_day_bars([*archived_minute_bars, *current_minute_bars], limit=5)
     latest = store.load_latest_quotes([normalized]).get(normalized) if hasattr(store, "load_latest_quotes") else None

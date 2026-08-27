@@ -82,14 +82,6 @@ class MySQLMarketDataStore:
 
     def _initialize_schema(self) -> None:
         statements = [
-            """CREATE TABLE IF NOT EXISTS bars (
-                symbol VARCHAR(32) NOT NULL, interval_name VARCHAR(16) NOT NULL, timestamp_value DATETIME(6) NOT NULL,
-                open_price DECIMAL(20,6) NOT NULL, high_price DECIMAL(20,6) NOT NULL, low_price DECIMAL(20,6) NOT NULL,
-                close_price DECIMAL(20,6) NOT NULL, volume DECIMAL(24,4) NOT NULL, amount DECIMAL(24,4) NOT NULL,
-                source VARCHAR(64) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                PRIMARY KEY (symbol, interval_name, timestamp_value)
-            ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS account_state (
                 id VARCHAR(32) PRIMARY KEY, cash DECIMAL(20,6) NOT NULL,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -209,6 +201,26 @@ class MySQLMarketDataStore:
                 volume DECIMAL(24,4) NOT NULL, amount DECIMAL(24,4) NOT NULL, adjustment_factor DECIMAL(28,12) NOT NULL,
                 source VARCHAR(64) NOT NULL, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (symbol, interval_name, timestamp_value)
+            ) CHARACTER SET utf8mb4""",
+            """CREATE TABLE IF NOT EXISTS index_price_tracks (
+                symbol VARCHAR(32) NOT NULL, interval_name VARCHAR(16) NOT NULL, timestamp_value DATETIME(6) NOT NULL,
+                open_price DECIMAL(20,6) NOT NULL, high_price DECIMAL(20,6) NOT NULL, low_price DECIMAL(20,6) NOT NULL,
+                close_price DECIMAL(20,6) NOT NULL, volume DECIMAL(24,4) NOT NULL, amount DECIMAL(24,4) NOT NULL,
+                source VARCHAR(64) NOT NULL, fetched_at DATETIME(6) NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (symbol, interval_name, timestamp_value),
+                INDEX idx_index_price_tracks_time (interval_name, timestamp_value, symbol)
+            ) CHARACTER SET utf8mb4""",
+            """CREATE TABLE IF NOT EXISTS intraday_bars (
+                symbol VARCHAR(32) NOT NULL, trade_date DATE NOT NULL, interval_name VARCHAR(16) NOT NULL,
+                timestamp_value DATETIME(6) NOT NULL,
+                open_price DECIMAL(20,6) NOT NULL, high_price DECIMAL(20,6) NOT NULL, low_price DECIMAL(20,6) NOT NULL,
+                close_price DECIMAL(20,6) NOT NULL, volume DECIMAL(24,4) NOT NULL, amount DECIMAL(24,4) NOT NULL,
+                source VARCHAR(64) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (symbol, interval_name, timestamp_value),
+                INDEX idx_intraday_bars_trade_date (trade_date, symbol, interval_name, timestamp_value)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS orders (
                 order_id VARCHAR(64) PRIMARY KEY, trade_date DATE NOT NULL, symbol VARCHAR(32) NOT NULL, asset_type VARCHAR(16) NOT NULL,
@@ -459,18 +471,7 @@ class MySQLMarketDataStore:
         if "idx_backtest_profile" not in indexes:
             cursor.execute("CREATE INDEX idx_backtest_profile ON backtest_runs (strategy_profile_id, status)")
 
-    def save_bars(self, bars: List[Bar], interval: str = "daily", source: str = "unknown") -> int:
-        if not bars:
-            return 0
-        self.initialize()
-        rows = [(bar.symbol, interval, _database_datetime(bar.timestamp), str(bar.open_price), str(bar.high_price), str(bar.low_price), str(bar.close_price), str(bar.volume), str(bar.amount), source) for bar in bars]
-        sql = """INSERT INTO bars (symbol, interval_name, timestamp_value, open_price, high_price, low_price, close_price, volume, amount, source)
-                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                 ON DUPLICATE KEY UPDATE open_price=VALUES(open_price), high_price=VALUES(high_price), low_price=VALUES(low_price), close_price=VALUES(close_price), volume=VALUES(volume), amount=VALUES(amount), source=VALUES(source), updated_at=CURRENT_TIMESTAMP"""
-        self._executemany(sql, rows)
-        return len(rows)
-
-    def save_price_tracks(self, raw_bars: List[Bar], qfq_bars: List[Bar], interval: str = "daily", source: str = "unknown") -> int:
+    def save_watchlist_price_tracks(self, raw_bars: List[Bar], qfq_bars: List[Bar], interval: str = "daily", source: str = "unknown") -> int:
         self.initialize()
         raw_by_time = {item.timestamp: item for item in raw_bars}
         qfq_by_time = {item.timestamp: item for item in qfq_bars}
@@ -491,10 +492,9 @@ class MySQLMarketDataStore:
                    ON DUPLICATE KEY UPDATE raw_open=VALUES(raw_open), raw_high=VALUES(raw_high), raw_low=VALUES(raw_low), raw_close=VALUES(raw_close), qfq_open=VALUES(qfq_open), qfq_high=VALUES(qfq_high), qfq_low=VALUES(qfq_low), qfq_close=VALUES(qfq_close), volume=VALUES(volume), amount=VALUES(amount), adjustment_factor=VALUES(adjustment_factor), source=VALUES(source)""",
                 rows,
             )
-        self.save_bars(qfq_bars or raw_bars, interval, source)
         return len(qfq_bars or raw_bars)
 
-    def load_bars(
+    def load_watchlist_bars(
         self,
         symbol: str,
         interval: str = "daily",
@@ -513,25 +513,12 @@ class MySQLMarketDataStore:
             filters.append("timestamp_value < %s")
             params.append(_database_datetime(datetime.combine(end + timedelta(days=1), time.min)))
         where = " AND ".join(filters)
-        if price_mode in {"raw", "qfq"}:
-            prefix = "raw" if price_mode == "raw" else "qfq"
-            select = f"symbol, timestamp_value, {prefix}_open, {prefix}_high, {prefix}_low, {prefix}_close, volume, amount, adjustment_factor"
-            table = "bar_price_tracks"
-        else:
-            select, table = "symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount", "bars"
-        if limit is None:
-            rows = self._fetchall(f"SELECT {select} FROM {table} WHERE {where} ORDER BY timestamp_value ASC", tuple(params))
-        else:
-            rows = self._fetchall(f"SELECT * FROM (SELECT {select} FROM {table} WHERE {where} ORDER BY timestamp_value DESC LIMIT %s) AS recent ORDER BY timestamp_value ASC", (*params, limit))
-        if not rows and price_mode in {"raw", "qfq"}:
-            legacy_select = "symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount"
-            if limit is None:
-                rows = self._fetchall(f"SELECT {legacy_select} FROM bars WHERE {where} ORDER BY timestamp_value ASC", tuple(params))
-            else:
-                rows = self._fetchall(f"SELECT * FROM (SELECT {legacy_select} FROM bars WHERE {where} ORDER BY timestamp_value DESC LIMIT %s) AS recent ORDER BY timestamp_value ASC", (*params, limit))
+        prefix = "raw" if price_mode == "raw" else "qfq"
+        select = f"symbol, timestamp_value, {prefix}_open, {prefix}_high, {prefix}_low, {prefix}_close, volume, amount, adjustment_factor"
+        rows = self._fetch_bars("bar_price_tracks", select, where, params, limit)
         return [_bar_from_row(row, price_mode) for row in rows]
 
-    def load_bars_batch(
+    def load_watchlist_bars_batch(
         self,
         symbols: list[str],
         interval: str = "daily",
@@ -559,17 +546,122 @@ class MySQLMarketDataStore:
             f"FROM bar_price_tracks WHERE {' AND '.join(filters)} ORDER BY symbol ASC, timestamp_value DESC",
             tuple(params),
         )
-        if not rows and price_mode in {"raw", "qfq"}:
-            rows = self._fetchall(
-                f"SELECT symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount "
-                f"FROM bars WHERE {' AND '.join(filters)} ORDER BY symbol ASC, timestamp_value DESC",
-                tuple(params),
-            )
         result = {symbol: [] for symbol in symbols}
         for row in rows:
             bucket = result.setdefault(row[0], [])
             if limit is None or len(bucket) < limit:
                 bucket.append(_bar_from_row(row, price_mode))
+        for symbol in result:
+            result[symbol].sort(key=lambda item: item.timestamp)
+        return result
+
+    def save_index_price_tracks(self, bars: List[Bar], interval: str = "daily", source: str = "unknown") -> int:
+        if not bars:
+            return 0
+        self.initialize()
+        fetched_at = _database_datetime(datetime.now(timezone.utc))
+        rows = [
+            (bar.symbol, interval, _database_datetime(bar.timestamp), str(bar.open_price), str(bar.high_price), str(bar.low_price), str(bar.close_price), str(bar.volume), str(bar.amount), source, fetched_at)
+            for bar in bars
+        ]
+        self._executemany(
+            """INSERT INTO index_price_tracks (
+                symbol, interval_name, timestamp_value, open_price, high_price, low_price, close_price, volume, amount, source, fetched_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE open_price=VALUES(open_price), high_price=VALUES(high_price), low_price=VALUES(low_price),
+                close_price=VALUES(close_price), volume=VALUES(volume), amount=VALUES(amount), source=VALUES(source),
+                fetched_at=VALUES(fetched_at), updated_at=CURRENT_TIMESTAMP""",
+            rows,
+        )
+        return len(rows)
+
+    def load_index_bars(self, symbol: str, interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None) -> List[Bar]:
+        self.initialize()
+        filters = ["symbol=%s", "interval_name=%s"]
+        params: list[object] = [symbol, interval]
+        if start is not None:
+            filters.append("timestamp_value >= %s")
+            params.append(_database_datetime(datetime.combine(start, time.min)))
+        if end is not None:
+            filters.append("timestamp_value < %s")
+            params.append(_database_datetime(datetime.combine(end + timedelta(days=1), time.min)))
+        rows = self._fetch_bars(
+            "index_price_tracks",
+            "symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount",
+            " AND ".join(filters),
+            params,
+            limit,
+        )
+        return [_bar_from_row(row, "raw") for row in rows]
+
+    def load_index_bars_batch(self, symbols: list[str], interval: str = "daily", limit: int | None = None, start: date | None = None, end: date | None = None) -> dict[str, List[Bar]]:
+        return self._load_plain_bars_batch("index_price_tracks", symbols, interval, limit, start, end)
+
+    def save_intraday_bars(self, bars: List[Bar], interval: str = "1m", source: str = "unknown") -> int:
+        if not bars:
+            return 0
+        self.initialize()
+        rows = [
+            (bar.symbol, _bar_trade_date(bar), interval, _database_datetime(bar.timestamp), str(bar.open_price), str(bar.high_price), str(bar.low_price), str(bar.close_price), str(bar.volume), str(bar.amount), source)
+            for bar in bars
+        ]
+        self._executemany(
+            """INSERT INTO intraday_bars (
+                symbol, trade_date, interval_name, timestamp_value, open_price, high_price, low_price, close_price, volume, amount, source
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE trade_date=VALUES(trade_date), open_price=VALUES(open_price), high_price=VALUES(high_price),
+                low_price=VALUES(low_price), close_price=VALUES(close_price), volume=VALUES(volume), amount=VALUES(amount),
+                source=VALUES(source), updated_at=CURRENT_TIMESTAMP""",
+            rows,
+        )
+        return len(rows)
+
+    def load_intraday_bars(self, symbol: str, interval: str = "1m", limit: int | None = None, start: date | None = None, end: date | None = None) -> List[Bar]:
+        self.initialize()
+        filters = ["symbol=%s", "interval_name=%s"]
+        params: list[object] = [symbol, interval]
+        if start is not None:
+            filters.append("trade_date >= %s")
+            params.append(start.isoformat())
+        if end is not None:
+            filters.append("trade_date <= %s")
+            params.append(end.isoformat())
+        rows = self._fetch_bars(
+            "intraday_bars",
+            "symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount",
+            " AND ".join(filters),
+            params,
+            limit,
+        )
+        return [_bar_from_row(row, "raw") for row in rows]
+
+    def _fetch_bars(self, table: str, select: str, where: str, params: list[object], limit: int | None) -> list[tuple]:
+        if limit is None:
+            return self._fetchall(f"SELECT {select} FROM {table} WHERE {where} ORDER BY timestamp_value ASC", tuple(params))
+        return self._fetchall(f"SELECT * FROM (SELECT {select} FROM {table} WHERE {where} ORDER BY timestamp_value DESC LIMIT %s) AS recent ORDER BY timestamp_value ASC", (*params, limit))
+
+    def _load_plain_bars_batch(self, table: str, symbols: list[str], interval: str, limit: int | None, start: date | None, end: date | None) -> dict[str, List[Bar]]:
+        if not symbols:
+            return {}
+        self.initialize()
+        placeholders = ",".join(["%s"] * len(symbols))
+        filters = [f"symbol IN ({placeholders})", "interval_name=%s"]
+        params: list[object] = [*symbols, interval]
+        if start is not None:
+            filters.append("timestamp_value >= %s")
+            params.append(_database_datetime(datetime.combine(start, time.min)))
+        if end is not None:
+            filters.append("timestamp_value < %s")
+            params.append(_database_datetime(datetime.combine(end + timedelta(days=1), time.min)))
+        rows = self._fetchall(
+            f"SELECT symbol, timestamp_value, open_price, high_price, low_price, close_price, volume, amount FROM {table} WHERE {' AND '.join(filters)} ORDER BY symbol ASC, timestamp_value DESC",
+            tuple(params),
+        )
+        result = {symbol: [] for symbol in symbols}
+        for row in rows:
+            bucket = result.setdefault(row[0], [])
+            if limit is None or len(bucket) < limit:
+                bucket.append(_bar_from_row(row, "raw"))
         for symbol in result:
             result[symbol].sort(key=lambda item: item.timestamp)
         return result
@@ -655,7 +747,7 @@ class MySQLMarketDataStore:
         )
         minute_bars = _quote_ticks_to_minute_bars([_quote_row(row) for row in rows])
         if minute_bars:
-            self.save_bars(minute_bars, interval="minute", source="market_quotes")
+            self.save_intraday_bars(minute_bars, interval="1m", source="market_quotes")
         return self._execute("DELETE FROM market_quotes WHERE trade_date<>%s", (trade_date.isoformat(),))
 
     def load_watchlist_items(self) -> list[dict[str, str]]:
@@ -1541,6 +1633,15 @@ class MySQLMarketDataStore:
 def _bar_from_row(row: tuple, price_mode: str = "qfq") -> Bar:
     factor = Decimal(row[8]) if len(row) > 8 else Decimal("1")
     return Bar(row[0], _as_datetime(row[1]), Decimal(row[2]), Decimal(row[3]), Decimal(row[4]), Decimal(row[5]), Decimal(row[6]), Decimal(row[7]), price_mode, factor)
+
+
+def _bar_trade_date(bar: Bar) -> str:
+    timestamp = bar.timestamp
+    if timestamp.tzinfo is not None:
+        from zoneinfo import ZoneInfo
+
+        timestamp = timestamp.astimezone(ZoneInfo("Asia/Shanghai"))
+    return timestamp.date().isoformat()
 
 
 def _database_datetime(value: datetime) -> str:

@@ -61,7 +61,7 @@ def optimize_strategy_from_store(config: AppConfig, store: MarketDataStore) -> o
     universe = Universe.from_config([item for item in watchlist if item.trading_enabled or item.symbol in portfolio.positions])
     symbols = [instrument.symbol for instrument in universe.instruments]
     interval = str(config.data.history.get("interval", "daily"))
-    bars_by_symbol = store.load_bars_batch(symbols, interval=interval)
+    bars_by_symbol = store.load_watchlist_bars_batch(symbols, interval=interval)
     result = optimize_strategy_parameters(
         bars_by_symbol,
         fee_rate=config.paper_account.fee_rate,

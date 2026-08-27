@@ -12,7 +12,7 @@ def refresh_lhb_seat_profiles(store) -> int:
     appearances: dict[str, int] = {}
     for record in store.load_lhb_records():
         symbol = str(record.get("symbol") or "")
-        bars = store.load_bars(symbol, interval="daily", price_mode="qfq")
+        bars = store.load_watchlist_bars(symbol, interval="daily", price_mode="qfq")
         indexed = {bar.timestamp.date().isoformat(): index for index, bar in enumerate(bars)}
         start = indexed.get(str(record.get("trade_date")))
         if start is None or start + 3 >= len(bars) or bars[start].close_price <= 0:

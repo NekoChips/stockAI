@@ -45,10 +45,12 @@ def missing_history_range(
     configured_start: str,
     configured_end: str,
     as_of: date | None = None,
+    loader: Any | None = None,
 ) -> tuple[str, str] | None:
     """Return the inclusive missing K-line range, or None when storage is current."""
     end_date = min(compact_date(configured_end), as_of or date.today())
-    recent = store.load_bars(symbol, interval=interval, limit=1)
+    load_history = loader or store.load_watchlist_bars
+    recent = load_history(symbol, interval=interval, limit=1)
     start_date = compact_date(configured_start)
     if recent:
         start_date = max(start_date, recent[-1].timestamp.date() + timedelta(days=1))
@@ -78,14 +80,14 @@ def sync_watchlist_history(
     candidates = [
         instrument
         for instrument in instruments
-        if force or not only_incomplete or len(store.load_bars(instrument.symbol, interval=interval, limit=minimum)) < minimum
+        if force or not only_incomplete or len(store.load_watchlist_bars(instrument.symbol, interval=interval, limit=minimum)) < minimum
     ]
     counts: dict[str, int] = {}
     warnings: list[str] = []
     started_at = datetime.now()
     for instrument in candidates:
         try:
-            existing = store.load_bars(instrument.symbol, interval=interval, limit=minimum)
+            existing = store.load_watchlist_bars(instrument.symbol, interval=interval, limit=minimum)
             if not force and len(existing) < minimum:
                 range_to_sync = (start, min(date_code(report_date), end))
             else:
@@ -97,10 +99,10 @@ def sync_watchlist_history(
             qfq_bars = adapter.get_bars(instrument.symbol, interval=interval, start=sync_start, end=sync_end, adjust=adjust)
             raw_bars = adapter.get_bars(instrument.symbol, interval=interval, start=sync_start, end=sync_end, adjust="")
             source = getattr(adapter, "last_source", "") or config.data.history_provider
-            if hasattr(store, "save_price_tracks"):
-                counts[instrument.symbol] = store.save_price_tracks(raw_bars, qfq_bars, interval=interval, source=source)
+            if hasattr(store, "save_watchlist_price_tracks"):
+                counts[instrument.symbol] = store.save_watchlist_price_tracks(raw_bars, qfq_bars, interval=interval, source=source)
             else:
-                counts[instrument.symbol] = store.save_bars(qfq_bars, interval=interval, source=source)
+                raise ValueError("当前存储适配器不支持观察池价格轨迹。")
         except Exception as exc:  # noqa: BLE001 - isolate one provider failure per symbol
             counts[instrument.symbol] = 0
             warnings.append(f"{instrument.symbol} 历史 K 线同步失败：{exc}")
