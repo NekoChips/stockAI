@@ -660,7 +660,10 @@ class RealTimePaperTradingMonitor:
         candidate = current + timedelta(days=1)
         while not self._is_trading_day(candidate):
             candidate += timedelta(days=1)
-        return datetime.combine(candidate, clock_time(9, 30), tzinfo=timezone)
+        # Snapshot collection starts at 09:15 (the auction window). Strategy
+        # evaluation still waits until 09:30, but the scheduler must wake up
+        # early enough to collect the first realtime quote.
+        return datetime.combine(candidate, clock_time(9, 15), tzinfo=timezone)
 
     def _local_now(self, now: datetime | None = None) -> datetime:
         current = now or datetime.now(self.timezone)

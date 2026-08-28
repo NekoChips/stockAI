@@ -9,7 +9,7 @@ from threading import Lock
 from typing import Iterator, List
 
 from ..config import MySQLConnectionConfig
-from ..journal import deduplicate_decision_timeline, decision_event_state, decision_position_context, make_business_event_key, normalize_daily_report, order_event_state
+from ..journal import deduplicate_decision_timeline, decision_event_state, decision_position_context, make_business_event_key, normalize_daily_report, order_event_state, persisted_decision_event_state
 from ..models import Bar, Decision, Direction, Fill, OrderStatus, PaperOrder, Portfolio, Position, Quote, StrategySignal
 from ..strategy_catalog import strategy_definitions
 from ..strategy_runtime import profile_from_config
@@ -906,7 +906,7 @@ class MySQLMarketDataStore:
                 )
                 previous_event = cursor.fetchone()
                 previous_state = (
-                    str(previous_event[1]), str(previous_event[3]), bool(previous_event[2]), str(previous_event[4] or "")
+                    persisted_decision_event_state(previous_event[1], previous_event[3], previous_event[2], previous_event[4])
                 ) if previous_event else None
                 state = decision_event_state(decision)
                 if previous_state == state:
