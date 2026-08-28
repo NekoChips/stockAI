@@ -146,6 +146,7 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 8, 0, tzinfo=tz)), 1800)
         self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 12, 0, tzinfo=tz)), 3600)
         self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 15, 10, tzinfo=tz)), 20 * 60)
+        self.assertEqual(monitor._sleep_seconds(datetime(2026, 8, 17, 21, 50, tzinfo=tz)), 11 * 60 * 60 + 25 * 60)
 
     def test_non_trading_day_sleep_skips_to_next_trading_day(self):
         config = configured_config()

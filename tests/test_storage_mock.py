@@ -41,6 +41,19 @@ class MockStorageTests(unittest.TestCase):
         )
         self.assertEqual(len(store.load_decision_events(trade_date)), 2)
 
+    def test_repeated_approved_neutral_decision_with_changed_details_is_not_recorded(self):
+        store = MockMarketDataStore()
+        trade_date = date(2026, 8, 26)
+        first = Decision("588170.SH", Direction.WATCH, Decimal("0.10"), True, ["首轮中性"], source_signal=None)
+        second = Decision("588170.SH", Direction.WATCH, Decimal("0.20"), True, ["参与策略变化"], source_signal=None)
+
+        store.record_decision(first, trade_date)
+        store.record_decision(second, trade_date)
+
+        events = store.load_decision_events(trade_date)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["target_weight"], "0.10")
+
     def test_repeated_same_order_state_is_not_recorded_as_a_new_business_event(self):
         store = MockMarketDataStore()
         trade_date = date(2026, 8, 26)

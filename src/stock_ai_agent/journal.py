@@ -8,6 +8,7 @@ from typing import Iterable
 from .models import Decision, Fill, PaperOrder, Portfolio
 
 MAX_DECISION_REASON_ITEMS = 20
+NEUTRAL_DIRECTIONS = {"持有", "观望"}
 
 
 def _merge_unique(items: list, additions: list) -> list:
@@ -18,13 +19,33 @@ def _merge_unique(items: list, additions: list) -> list:
     return merged[-MAX_DECISION_REASON_ITEMS:]
 
 
+def persisted_decision_event_state(
+    direction: object,
+    target_weight: object,
+    approved: object,
+    strategy_id: object,
+) -> tuple[str, str, bool, str]:
+    """Normalize a decision to the state that should create a business event.
+
+    Repeated approved neutral evaluations are not business transitions. Their
+    calculated target weight and participating strategy can vary slightly from
+    round to round, but the observable state remains "held" or "watching".
+    """
+    direction_value = getattr(direction, "value", direction)
+    direction_value = str(direction_value or "")
+    approved_value = bool(approved)
+    if approved_value and direction_value in NEUTRAL_DIRECTIONS:
+        return direction_value, "neutral", True, ""
+    return direction_value, str(target_weight), approved_value, str(strategy_id or "")
+
+
 def decision_event_state(decision: Decision) -> tuple[str, str, bool, str]:
-    """Return only the business state that should create a new strategy event."""
+    """Return the normalized business state that should create a new event."""
     signal = decision.source_signal
-    return (
-        decision.direction.value,
-        str(decision.target_weight),
-        bool(decision.approved),
+    return persisted_decision_event_state(
+        decision.direction,
+        decision.target_weight,
+        decision.approved,
         signal.strategy_id if signal else "",
     )
 
@@ -101,10 +122,12 @@ def _timeline_state(row: dict) -> tuple:
     return (
         phase,
         str(row.get("symbol") or ""),
-        str(row.get("direction") or ""),
-        str(row.get("target_weight") or ""),
-        bool(row.get("approved")) if row.get("approved") is not None else None,
-        str(row.get("strategy_id") or ""),
+        *persisted_decision_event_state(
+            row.get("direction"),
+            row.get("target_weight"),
+            row.get("approved") if row.get("approved") is not None else False,
+            row.get("strategy_id"),
+        ),
     )
 
 
