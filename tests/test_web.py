@@ -472,6 +472,29 @@ class WebDashboardTests(unittest.TestCase):
         self.assertEqual(len(limited["events"]), 1)
         self.assertEqual(limited["events"][0]["type"], "fill")
 
+    def test_decision_events_payload_compacts_legacy_neutral_duplicates(self):
+        from stock_ai_agent.web_dashboard import build_dashboard_decision_events_payload
+
+        trade_date = date(2026, 8, 17)
+        store = SQLiteMarketDataStore()
+        store._decision_events.extend([
+            {
+                "trade_date": trade_date.isoformat(), "symbol": "588170.SH", "phase": "decision",
+                "direction": "观望", "approved": True, "target_weight": "0.10", "strategy_id": "strategy_a",
+                "event_at": "2026-08-17T09:30:00+00:00", "event_key": "legacy-neutral-1",
+            },
+            {
+                "trade_date": trade_date.isoformat(), "symbol": "588170.SH", "phase": "decision",
+                "direction": "观望", "approved": True, "target_weight": "0.20", "strategy_id": "strategy_b",
+                "event_at": "2026-08-17T09:31:00+00:00", "event_key": "legacy-neutral-2",
+            },
+        ])
+
+        payload = build_dashboard_decision_events_payload(store, as_of=trade_date)
+
+        self.assertEqual(len(payload["events"]), 1)
+        self.assertEqual(payload["events"][0]["event_at"], "2026-08-17T09:31:00+00:00")
+
     def test_decision_events_invalid_date_raises(self):
         from stock_ai_agent.web_dashboard import _query_date
 

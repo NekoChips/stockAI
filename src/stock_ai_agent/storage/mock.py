@@ -18,6 +18,7 @@ from ..journal import (
     make_business_event_key,
     normalize_daily_report,
     order_event_state,
+    persisted_decision_event_state,
 )
 from ..models import Bar, Decision, Direction, Fill, OrderStatus, PaperOrder, Portfolio, Position, Quote
 from ..strategy_catalog import strategy_definitions
@@ -278,11 +279,15 @@ class MockMarketDataStore:
             None,
         )
         previous_state = (
-            str(previous_event.get("direction")),
-            str(previous_event.get("target_weight")),
-            bool(previous_event.get("approved")),
-            str(previous_event.get("strategy_id") or ""),
-        ) if previous_event else None
+            persisted_decision_event_state(
+                previous_event.get("direction"),
+                previous_event.get("target_weight"),
+                previous_event.get("approved"),
+                previous_event.get("strategy_id"),
+            )
+            if previous_event
+            else None
+        )
         if previous_state == decision_event_state(decision):
             return
         position_quantity, position_weight, position_state = decision_position_context(portfolio, decision.symbol)

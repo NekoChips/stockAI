@@ -24,6 +24,7 @@ from .watchlist import effective_watchlist
 from .risk_config import parse_risk_config, resolve_risk_config, risk_config_payload
 from .strategy_catalog import strategy_definitions
 from .strategy_runtime import resolve_strategy_profile
+from .journal import deduplicate_decision_timeline
 
 
 ANALYSIS_START_DATE = date(2026, 1, 1)
@@ -224,6 +225,9 @@ def build_dashboard_decision_events_payload(
     limit = max(1, min(int(limit), 500))
     events: list[dict[str, Any]] = []
     raw = store.load_decision_events(as_of) if hasattr(store, "load_decision_events") else []
+    # Keep already-persisted legacy duplicates out of the live dashboard while
+    # the monitor performs its normal database compaction.
+    raw = deduplicate_decision_timeline(raw)
     for item in raw:
         phase = item.get("phase") or "decision"
         events.append(
